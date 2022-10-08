@@ -1,8 +1,8 @@
 import Lake
 open Lake DSL
 
-package Rewriting
+package Rewriting where
+  srcDir := "Rewriting"
 
 @[defaultTarget]
 lean_lib Rewriting
-

@@ -1,10 +1,12 @@
-import Lean.Meta
-
 abbrev relation (α: Type _) := α → α → Prop
 
 def respectful (Rα: relation α) (Rβ: relation β): relation (α → β) :=
   fun f g => (forall a a', Rα a a' → Rβ (f a) (g a'))
 
+def impl (P Q: Prop) := P → Q
+
+notation Rα " ++> " Rβ => respectful Rα Rβ
+notation Rα " --> " Rβ => respectful (flip Rα) Rβ
 notation Rα " ==> " Rβ => respectful Rα Rβ
 
 -- Not using Init.Core.Equivalence because it's not a typeclass
@@ -39,7 +41,7 @@ instance: Equiv Iff where
   symm := Iff.symm
   trans := Iff.trans
 
-class Proper (R: relation α) [PER R] (x: α) where
+class Proper (R: relation α) (x: α) where
   prf: R x x
 
 instance {R: relation α} [PER R]: Proper (R ==> R ==> Iff) R where
@@ -136,9 +138,10 @@ variable (f: α → β → γ)
 variable [P₁: Proper (Rα₁ ==> Rβ₁ ==> Rγ₁) f]
 variable [P₂: Proper (Rα₂ ==> Rβ₂ ==> Rγ₂) f]
 
+/- Too slow
 #synth Proper (Rα₁ ==> Rβ₁ ==> Rγ₁) f
 #synth Proper (Eq ==> Rβ₁ ==> Rγ₁) f
 #synth Proper (Rα₁ ==> Eq ==> Rγ₁) f
-#synth Proper (Eq ==> Eq ==> Rγ₁) f
+#synth Proper (Eq ==> Eq ==> Rγ₁) f -/
 
 end TypeclassResolution
