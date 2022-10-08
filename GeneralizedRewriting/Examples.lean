@@ -1,4 +1,4 @@
-import Rewriting.Algorithm
+import GeneralizedRewriting.Algorithm
 
 section Examples
 

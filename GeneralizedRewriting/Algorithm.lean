@@ -76,7 +76,7 @@ The set of instances of `subrelation` should be:
 otherwise we might miss some valid solutions.
 -/
 
-import Rewriting.Rewriting
+import GeneralizedRewriting.Defs
 import Lean.Meta
 import Lean.Meta.InferType
 import Lean.Elab.Term

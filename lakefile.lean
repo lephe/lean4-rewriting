@@ -1,8 +1,7 @@
 import Lake
 open Lake DSL
 
-package Rewriting where
-  srcDir := "Rewriting"
+package GeneralizedRewriting
 
 @[defaultTarget]
-lean_lib Rewriting
+lean_lib GeneralizedRewriting
