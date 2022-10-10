@@ -138,15 +138,17 @@ def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) := traceCtx `Meta.Tactic
   -- [ATOM]: Default to requiring proper on the atom
   trace[Meta.Tactic.grewrite] "using rule: ATOM"
   let τ ← inferType t
-  let m_S ← mkFreshExprMVar (← mkAppM ``relation #[τ]) (userName := `S)
-  let m_Proper ← mkFreshExprMVar (← mkAppM ``Proper #[m_S, t]) (userName := `m)
+  let m_S ← mkFreshExprMVar (← mkAppM ``relation #[τ])
+  let m_Proper ← mkFreshExprMVar (← mkAppM ``Proper #[m_S, t])
   addConstraint m_S
   addConstraint m_Proper
   return (t, m_S, m_Proper)
 
 def skeletonMain (t: Expr): RewriteM (Expr × Expr × Expr) := do
   let (u, R, p) ← skeleton t
-  addConstraint (← mkAppM ``Subrel #[R, ← mkAppM ``flip #[mkConst ``impl]])
+  let MainSubrel ← mkAppM ``Subrel #[R, ← mkAppM ``flip #[mkConst ``impl]]
+  let m_MainSubrel ← mkFreshExprMVar MainSubrel
+  addConstraint m_MainSubrel
   return (u, R, p)
 
 end RewriteM
@@ -163,12 +165,16 @@ elab "grewrite " h:term : tactic =>
     match ρ with
     | .app (.app ρ_R ρ_t _) ρ_u _ =>
         trace[Meta.Tactic.grewrite] "The goal is: {← Meta.ppExpr goalDecl.type}"
-        trace[Meta.Tactic.grewrite] "Found relation: ρ_R={← Meta.ppExpr ρ_R} ρ_t={← Meta.ppExpr ρ_t} ρ_u={← Meta.ppExpr ρ_u}"
+        trace[Meta.Tactic.grewrite]
+          "Found relation: ρ_R={← Meta.ppExpr ρ_R} ρ_t={← Meta.ppExpr ρ_t} ρ_u={← Meta.ppExpr ρ_u}"
         let st: RewriteState := { ρ, ρ_R, ρ_t, ρ_u, ψ := [] }
         let ((u, R, p), st') ← RewriteM.run (RewriteM.skeletonMain goalDecl.type) st
         let ψ := st'.ψ
-        let pp ← ψ.mapM (fun e => ppExpr e)
-        trace[Meta.Tactic.grewrite] "Constraints to solve: {pp}"
+
+        let pp ← ψ.mapM fun e => do
+          let type_e ← inferType e
+          return f!"\n  {← ppExpr e}: {← ppExpr type_e}"
+        trace[Meta.Tactic.grewrite] "Constraints to solve: {Format.join pp}"
         -- TODO: solve st'.ψ and apply p
     | _ =>
         throwError f!"Could not interpret [{← Meta.ppExpr ρ}] as a relation"

@@ -1,15 +1,12 @@
+/-
+## Relation classes
+
+Init.Core provides some utilities, specifically `Init.Core.Equivalence`, but
+we're not using it because it's not a typeclass (and difficult to relate to the
+other relation classes).
+-/
+
 abbrev relation (α: Type _) := α → α → Prop
-
-def respectful (Rα: relation α) (Rβ: relation β): relation (α → β) :=
-  fun f g => (forall a a', Rα a a' → Rβ (f a) (g a'))
-
-def impl (P Q: Prop) := P → Q
-
-notation Rα " ++> " Rβ => respectful Rα Rβ
-notation Rα " --> " Rβ => respectful (flip Rα) Rβ
-notation Rα " ==> " Rβ => respectful Rα Rβ
-
--- Not using Init.Core.Equivalence because it's not a typeclass
 
 class Reflexive {α: Type _} (R: relation α) where
   refl: ∀ x, R x x
@@ -22,27 +19,75 @@ class Transitive {α: Type _} (R: relation α) where
 
 class PER {α: Type _} (R: relation α) extends Symmetric R, Transitive R
 
-instance [PER R₁] [PER R₂]: PER (R₁ ==> R₂) where
+class Equiv {α: Type _} (R: relation α) extends PER R, Reflexive R
+
+/-
+## Morphisms
+-/
+
+def respectful (Rα: relation α) (Rβ: relation β): relation (α → β) :=
+  fun f g => forall a a', Rα a a' → Rβ (f a) (g a')
+
+def pointwise_relation (α: Type _) {β} (R: relation β) : relation (α -> β) :=
+  fun f g => forall a, R (f a) (g a)
+
+def forall_relation {α: Type _} {P: α → Type _}
+    (sig: forall a, relation (P a)): relation (forall x, P x) :=
+  fun f g => forall a, sig a (f a) (g a)
+
+def impl (P Q: Prop) := P → Q
+
+class Proper (R: relation α) (x: α): Prop where
+  prf: R x x
+
+class Subrel {α} (R₁ R₂: relation α): Prop where
+  prf: Subrelation R₁ R₂
+
+notation Rα " ++> " Rβ => respectful Rα Rβ
+notation Rα " --> " Rβ => respectful (flip Rα) Rβ
+notation Rα " ==> " Rβ => respectful Rα Rβ
+
+-- Instances used by the search algorithm
+
+instance Subrel_respectful [Sα: @Subrel α R₂ R₁] [Sβ: @Subrel β S₁ S₂]:
+    Subrel (R₁ ==> S₁) (R₂ ==> S₂) where
+  prf H _ _ h := Sβ.prf (H _ _ (Sα.prf h))
+
+instance Proper_pointwise_relation {α β: Type _}:
+    Proper (Subrel ==> Subrel) (@pointwise_relation α β) where
+  prf _ _ h := ⟨fun hpr a => h.prf (hpr a)⟩
+
+instance Subrel_pointwise [S: @Subrel β R₁ R₂]:
+    Subrel (pointwise_relation α R₁) (pointwise_relation α R₂) where
+  prf h a := S.prf (h a)
+
+-- Standard instances
+
+instance: Equiv (@Eq α) where
+  refl  := Eq.refl
+  symm  := Eq.symm
+  trans := Eq.trans
+
+instance: Equiv Iff where
+  refl  := Iff.refl
+  symm  := Iff.symm
+  trans := Iff.trans
+
+instance Proper_flip [P: Proper (Rα ==> Rβ ==> Rγ) f]:
+    Proper (Rβ ==> Rα ==> Rγ) (flip f) where
+  prf _ _ h_b _ _ h_a := P.prf _ _ h_a _ _ h_b
+
+instance Subrel_Eq [Reflexive R]: Subrel Eq R where
+  prf h := h ▸ Reflexive.refl _
+
+instance respectful_PER [PER R₁] [PER R₂]: PER (R₁ ==> R₂) where
   symm h x y h₁ := Symmetric.symm <| h y x <| Symmetric.symm h₁
   trans h h' x y h₁ :=
     Transitive.trans
       (h x y h₁)
       (h' y y (Transitive.trans (Symmetric.symm h₁) h₁))
 
-class Equiv {α: Type _} (R: relation α) extends PER R, Reflexive R
-
-instance {α}: Equiv (@Eq α) where
-  refl _ := rfl
-  symm h := h.symm
-  trans h₁ h₂ := Eq.trans h₁ h₂
-
-instance: Equiv Iff where
-  refl := Iff.refl
-  symm := Iff.symm
-  trans := Iff.trans
-
-class Proper (R: relation α) (x: α) where
-  prf: R x x
+--
 
 instance {R: relation α} [PER R]: Proper (R ==> R ==> Iff) R where
   prf _ _ h_a _ _ h_b :=
@@ -103,10 +148,6 @@ example (h: Rα a a'): Rβ (fαβ a) x := by
 end Examples
 
 -- Test how general we can make the typeclass search
-
-class Subrel {α} (R₁ R₂: relation α) where
-  prf: Subrelation R₁ R₂
-
 -- These rules do blow up for obvious reasons
 
 instance Subrel_Respectful_1 {Rα₁ Rα₂: relation α} {Rβ: relation β}

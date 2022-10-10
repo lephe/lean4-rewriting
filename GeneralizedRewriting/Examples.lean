@@ -12,6 +12,10 @@ variable [Proper_fαβ: Proper (Rα ==> Rβ) fαβ]
 
 set_option trace.Meta.Tactic.grewrite true
 
+example (h: Rα a a') : Pα a := by
+  grewrite h
+  sorry
+
 example (h: Rα a a') : Rα a x := by
   grewrite h
   sorry
