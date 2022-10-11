@@ -118,10 +118,9 @@ def addConstraint (e: Expr): RewriteM Unit := do
   let st ← get
   set { st with ψ := st.ψ ++ [e] }
 
-def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) := traceCtx `Meta.Tactic.grewrite do
+def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) :=
+    withTraceNode `Meta.Tactic.grewrite (fun _ => return m!"skeleton: {← ppExpr t}") do
   let state ← get
-
-  trace[Meta.Tactic.grewrite] "skeleton: {← ppExpr t}"
 
   -- [UNIFY]: First try to unify t with the LHS of ρ to apply ρ directly
   if ← isDefEq t state.ρ_t then
@@ -129,7 +128,7 @@ def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) := traceCtx `Meta.Tactic
     return (state.ρ_u, state.ρ_R, state.ρ)
 
   -- [APP]: Handle applications
-  if let .app f e _ := t then
+  if let .app f e := t then
     let type_f ← whnf (← inferType f)
     trace[Meta.Tactic.grewrite] "type_f = {← ppExpr type_f}"
     if type_f.isArrow then
@@ -169,12 +168,12 @@ end RewriteM
 elab "grewrite " h:term : tactic =>
   Elab.Tactic.withMainContext do
     let goal ← Elab.Tactic.getMainGoal
-    let goalDecl ← Meta.getMVarDecl goal
+    let goalDecl ← goal.getDecl
     let h ← Elab.Term.elabTerm h .none
     let ρ ← Meta.inferType (← Meta.whnf h)
 
     match ρ with
-    | .app (.app ρ_R ρ_t _) ρ_u _ =>
+    | .app (.app ρ_R ρ_t) ρ_u =>
         trace[Meta.Tactic.grewrite] "The goal is: {← Meta.ppExpr goalDecl.type}"
         trace[Meta.Tactic.grewrite]
           "Found relation: ρ_R={← Meta.ppExpr ρ_R} ρ_t={← Meta.ppExpr ρ_t} ρ_u={← Meta.ppExpr ρ_u}"
