@@ -1,16 +1,42 @@
 /-
+# Generalized rewriting algorithm
+
+This algorithm produces a "skeleton" of the proof for a rewrite. It provides
+the main structure, but leaves two elements undefined (through metavariables):
+
+1. Which relations to use in the codomain of relevant function calls;
+2. Which subrelation instances to use.
+
+It produces a set of typeclass queries for `Proper` and `Subrel` which
+reference subterms of the goal as well as newly-introduced metavariables for
+relations to guess.
+
+Note that `Subrel` could in principle be used everywhere, which makes it rather
+difficult to deal with. The algorithm makes simplifications by assuming that
+the set of instances of `Subrel` is:
+
+- Transitive;
+- Closed under `pointwise_relation`,
+
+in order to generate a workable set of queries. If the set of instances of
+`Subrel` does not satisfy the following requirements, the rewriting tactic may
+fail to generate a proof that the rewrite is correct.
+
+Based on:
+[1] Sozeau, M. 2009. A New Look at Generalized Rewriting in Type Theory.
+    Journal of Formalized Reasoning. 2, 1 (Jan. 2009), 41–62.
+    DOI:https://doi.org/10.6092/issn.1972-5787/1574.
+
 ## Inputs and outputs
 
-Context:
-  Γ  -- Environment [ro]
-  ρ  -- Rewriting lemma (of the form ∀ ϕ→, R α→ t u) [ro]
-  ψ  -- Output constraints (Propers and subrelations mainly) [rw]
 Inputs:
   τ  -- Input term
+  ρ  -- Rewriting lemma (of the form `∀ ϕ…, R α… t u`)
 Outputs:
   τ' -- Rewritten term
   R  -- Relation for rewriting (contains metavariables)
   p  -- Proof of rewrite
+  ψ  -- Typeclass queries that need solving
 
 TODO:
   - What kind of new constraints ψ do you get from unifying in the UNIFY rule?
@@ -20,37 +46,32 @@ TODO:
 
 ## Skeleton algorithm
 
-Start:
+At the top level:
   (u, R, p) ← solve t
-  add_to_ψ (get_Γ ⊢ subrelation R impl⁻¹)
-  return (u, R, p, get_ψ)
+  add_to_ψ (Γ ⊢ Subrel R (flip impl))
+  return (u, R, p, ψ)
 
 On input t:
 
   1. [UNIFY]
      If t unifies with the lhs of ρ, yielding ψ and [ρ' : R t u]:
-
-     return (u, R, ρ')
+       return (u, R, ρ')
 
   2. [APP]
-     If t is an app [f e] and the whnf of the type of f in [get_Γ ∪ get_ψ] is
+     If t is an app [f e] and the whnf of the type of f in [Γ ∪ ψ] is
      some non-dependent function type [τ → σ]:
-
-     (f', F, pf) ← solve f
-     (e', E, pe) ← solve e
-     ?T ← make_meta_variable in environment get_Γ
-     add_to_ψ {get_Γ ⊢ ?T : relation σ}
-     ?sub ← make_meta_variable in environment get_Γ
-     add_to_ψ {get_Γ ⊢ ?sub : subrelation F (E ++> ?T)}
-     return (f' e', ?T, ?sub f f' pf e e' pe)
+       (f', F, pf) ← solve f
+       (e', E, pe) ← solve e
+       add_to_ψ {Γ ⊢ ?T : relation σ}
+       add_to_ψ {Γ ⊢ ?sub : Subrel F (E ++> ?T)}
+       return (f' e', ?T, ?sub f f' pf e e' pe)
 
   3. [ARROW]
      If t is a non-dependent arrow [τ₁ → τ₂].
-
-     (u, S, p) ← solve (impl τ₁ τ₂)
-     match u with
-     | impl τ₁' τ₂' => return (τ₁' → τ₂', S, p)
-     | _ => ???
+       (u, S, p) ← solve (impl τ₁ τ₂)
+       match u with
+       | impl τ₁' τ₂' => return (τ₁' → τ₂', S, p)
+       | _ => ???
 
   4. [LAMBDA]
      TODO
@@ -60,20 +81,10 @@ On input t:
 
   6. [ATOM]
      If all else fails and there is no occurrence of the lhs of ρ in t:
-
-     τ ← type t
-     ?S ← make_meta_variable in environment get_Γ
-     add_to_ψ {get_Γ ⊢ ?S : relation τ}
-     ?m ← make_meta_variable in environment get_Γ
-     add_to_ψ {get_Γ ⊢ Proper ?S t}
-     return (t, ?S, ?m)
-
-## Assumptions
-
-The set of instances of `subrelation` should be:
-  - Transitive
-  - Closed under `pointwise_relation`
-otherwise we might miss some valid solutions.
+       τ ← type t
+       add_to_ψ {Γ ⊢ ?S : relation τ}
+       add_to_ψ {Γ ⊢ Proper ?S t}
+       return (t, ?S, ?m)
 -/
 
 import GeneralizedRewriting.Defs
@@ -129,8 +140,7 @@ def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) := traceCtx `Meta.Tactic
         let (f', F, pf) ← skeleton f
         let (e', E, pe) ← skeleton e
         let m_T ← mkFreshExprMVar (← mkAppM ``relation #[σ])
-        let m_sub ← mkFreshExprMVar (← mkAppM ``Subrel #[F,
-          ← mkAppM ``respectful #[E, m_T]])
+        let m_sub ← mkFreshExprMVar (← mkAppM ``Subrel #[F, ← mkAppM ``respectful #[E, m_T]])
         addConstraint m_T
         addConstraint m_sub
         return (mkApp f' e', m_T, mkAppN m_sub #[f, f', pf, e, e', pe])
@@ -153,6 +163,7 @@ def skeletonMain (t: Expr): RewriteM (Expr × Expr × Expr) := do
 
 end RewriteM
 
+
 -- Tactic front-end
 
 elab "grewrite " h:term : tactic =>
@@ -168,7 +179,7 @@ elab "grewrite " h:term : tactic =>
         trace[Meta.Tactic.grewrite]
           "Found relation: ρ_R={← Meta.ppExpr ρ_R} ρ_t={← Meta.ppExpr ρ_t} ρ_u={← Meta.ppExpr ρ_u}"
         let st: RewriteState := { ρ, ρ_R, ρ_t, ρ_u, ψ := [] }
-        let ((u, R, p), st') ← RewriteM.run (RewriteM.skeletonMain goalDecl.type) st
+        let ((u, R, p), st') ← RewriteM.skeletonMain goalDecl.type st |>.run
         let ψ := st'.ψ
 
         let pp ← ψ.mapM fun e => do
