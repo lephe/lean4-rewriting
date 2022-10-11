@@ -1,4 +1,5 @@
 import GeneralizedRewriting.Algorithm
+import GeneralizedRewriting.Eauto
 
 section Examples
 
@@ -22,4 +23,11 @@ example (h: Rα a a') : Rα a x := by
 example (h: Rα a a') : Rβ (fαβ a) x := by
   grewrite h
   sorry
+
+set_option trace.Meta.Tactic.eauto true
+set_option trace.Meta.Tactic.eauto.hints true
+
+example: Proper (Rα ==> Rβ) fαβ := by
+  eauto
+
 end Examples
