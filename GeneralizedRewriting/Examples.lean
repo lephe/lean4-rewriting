@@ -30,4 +30,7 @@ set_option trace.Meta.Tactic.eauto.hints true
 example: Proper (Rα ==> Rβ) fαβ := by
   eauto
 
+example (h : δ → γ) (a : α) : γ := by
+  eauto
+
 end Examples
