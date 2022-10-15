@@ -24,13 +24,4 @@ example (h: Rα a a') : Rβ (fαβ a) x := by
   grewrite h
   sorry
 
-set_option trace.Meta.Tactic.eauto true
-set_option trace.Meta.Tactic.eauto.hints true
-
-example: Proper (Rα ==> Rβ) fαβ := by
-  eauto
-
-example (h : δ → γ) (a : α) : γ := by
-  eauto
-
 end Examples

@@ -177,7 +177,7 @@ elab "grewrite " h:term : tactic =>
 
         let pp ← ψ.mapM fun e => do
           let type_e ← inferType e
-          return f!"\n  {e}: {type_e}"
+          return f!"\n  {e}: {← ppExpr type_e}"
         trace[Meta.Tactic.grewrite] "Constraints to solve: {Format.join pp.toList}"
         -- TODO: solve st'.ψ and apply p
     | _ =>
