@@ -88,10 +88,7 @@ On input t:
 -/
 
 import GeneralizedRewriting.Defs
-import Lean.Meta
-import Lean.Meta.InferType
-import Lean.Elab.Term
-import Lean.Util.Trace
+import Lean
 
 open Lean Meta Elab Tactic
 
@@ -105,7 +102,7 @@ structure RewriteState where
   ρ_R: Expr
   ρ_t: Expr
   ρ_u: Expr
-  ψ: List Expr
+  ψ: Array Expr
 
 abbrev RewriteM := StateT RewriteState TacticM
 
@@ -116,10 +113,10 @@ def run: RewriteM α → RewriteState → TacticM (α × RewriteState) :=
 
 def addConstraint (e: Expr): RewriteM Unit := do
   let st ← get
-  set { st with ψ := st.ψ ++ [e] }
+  set { st with ψ := st.ψ.push e }
 
 def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) :=
-    withTraceNode `Meta.Tactic.grewrite (fun _ => return m!"skeleton: {← ppExpr t}") do
+  withTraceNode `Meta.Tactic.grewrite (fun _ => return m!"skeleton: {t}") do
   let state ← get
 
   -- [UNIFY]: First try to unify t with the LHS of ρ to apply ρ directly
@@ -130,12 +127,9 @@ def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) :=
   -- [APP]: Handle applications
   if let .app f e := t then
     let type_f ← whnf (← inferType f)
-    trace[Meta.Tactic.grewrite] "type_f = {← ppExpr type_f}"
-    if type_f.isArrow then
+    trace[Meta.Tactic.grewrite] "type_f = {type_f}"
+    if let some (_, σ) := type_f.arrow? then
         trace[Meta.Tactic.grewrite] "using rule: APP"
-        let σ := match type_f with
-                 | .forallE _ _ σ _ => σ
-                 | _ => type_f /- impossible -/
         let (f', F, pf) ← skeleton f
         let (e', E, pe) ← skeleton e
         let m_T ← mkFreshExprMVar (← mkAppM ``relation #[σ])
@@ -166,27 +160,27 @@ end RewriteM
 -- Tactic front-end
 
 elab "grewrite " h:term : tactic =>
-  Elab.Tactic.withMainContext do
-    let goal ← Elab.Tactic.getMainGoal
+  withMainContext do
+    let goal ← getMainGoal
     let goalDecl ← goal.getDecl
-    let h ← Elab.Term.elabTerm h .none
-    let ρ ← Meta.inferType (← Meta.whnf h)
+    let h ← elabTerm h .none
+    let ρ ← inferType (← whnf h)
 
     match ρ with
     | .app (.app ρ_R ρ_t) ρ_u =>
-        trace[Meta.Tactic.grewrite] "The goal is: {← Meta.ppExpr goalDecl.type}"
+        trace[Meta.Tactic.grewrite] "The goal is: {goalDecl.type}"
         trace[Meta.Tactic.grewrite]
-          "Found relation: ρ_R={← Meta.ppExpr ρ_R} ρ_t={← Meta.ppExpr ρ_t} ρ_u={← Meta.ppExpr ρ_u}"
-        let st: RewriteState := { ρ, ρ_R, ρ_t, ρ_u, ψ := [] }
+          "Found relation: ρ_R={ρ_R} ρ_t={ρ_t} ρ_u={ρ_u}"
+        let st: RewriteState := { ρ, ρ_R, ρ_t, ρ_u, ψ := #[] }
         let ((u, R, p), st') ← RewriteM.skeletonMain goalDecl.type st |>.run
         let ψ := st'.ψ
 
         let pp ← ψ.mapM fun e => do
           let type_e ← inferType e
-          return f!"\n  {← ppExpr e}: {← ppExpr type_e}"
-        trace[Meta.Tactic.grewrite] "Constraints to solve: {Format.join pp}"
+          return f!"\n  {e}: {type_e}"
+        trace[Meta.Tactic.grewrite] "Constraints to solve: {Format.join pp.toList}"
         -- TODO: solve st'.ψ and apply p
     | _ =>
-        throwError f!"Could not interpret [{← Meta.ppExpr ρ}] as a relation"
+        throwError f!"Could not interpret [{ρ}] as a relation"
         return
     return

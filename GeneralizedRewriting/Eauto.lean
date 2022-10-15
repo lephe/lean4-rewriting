@@ -41,14 +41,9 @@ TODO: Sort constant hints by priority (determining the priority requires
       applying them; potentially unifiying metavars... is there a simpler
       measure like the number of dependent hypotheses?)
 TODO: Figure out how to apply extern hints
-TODO: Cancel metavars' assignments if applying a given hint fails to close
-TODO: Recurse in the search and bound it
 -/
 
-import Lean.Meta.SynthInstance
-import Lean.Util.Trace
-import Lean.Elab.Tactic
-import Lean.Meta.Tactic.Apply
+import Lean
 
 open Lean Meta Elab Tactic
 
@@ -63,88 +58,90 @@ inductive Hint where
   | Constant (n: Name) (expr: Expr) (type: Expr)
   | Extern (term: Term) (tactic: TSyntax `tactic) (cost: Nat)
 
-instance: ToString Hint where
-  toString := fun
-    | .Constant n _ type => s!"{n}: {type}"
-    | .Extern term tactic cost => s!"Extern {cost}: {term} => {tactic}"
-
-def Hint.toString (h: Hint): MetaM Format := do
-  match h with
-  | .Constant n _ type => return f!"{n}: {← ppExpr type}"
-  | .Extern term tactic cost => return f!"Extern {cost}: {term} => {tactic}"
+instance : ToMessageData Hint where
+  toMessageData
+    | .Constant n _ type => m!"{n}: {type}"
+    | .Extern term tactic cost => m!"Extern {cost}: {term} => {tactic}"
 
 structure HintDB where
   name: Name
-  hints: List Hint
+  hints: Array Hint
 
 structure Context where
-  hintDatabases: List HintDB
+  hintDatabases: Array HintDB
   useTypeclasses: Bool
   maximumDepth: Nat
+  depth : Nat
 
-abbrev EautoM := ReaderT Context TacticM
+abbrev EautoM := ReaderT Context MetaM
 
-/- Returns a proof of `goal`; updates metavariables as a side-effect. -/
-def solveSubgoal (goalMvar: MVarId) (depth: Nat): EautoM (Option Expr) :=
-    withTraceNode `Meta.Tactic.eauto
-    (fun _ => return m!"goal[{depth}]: {← Meta.ppExpr (← goalMvar.getDecl).type}") do
+instance : MonadBacktrack Meta.SavedState EautoM where
+  saveState := Meta.saveState
+  restoreState s := s.restore
 
-  let goal := (← goalMvar.getDecl).type
+partial def solveSubgoal (goalMVar: MVarId) : EautoM Unit := do
+  let ctx ← read
+  let depth := ctx.depth
+  withTraceNode `Meta.Tactic.eauto
+    (fun _ => return m!"goal[{depth}]: {← goalMVar.getType}") do
 
-  trace[Meta.Tactic.eauto.goals] "goal[{depth}]: {← ppExpr goal}"
+  let goal ← goalMVar.getType
 
-  if depth > (← read).maximumDepth then
-    return .none
+  trace[Meta.Tactic.eauto.goals] "goal[{depth}]: {goal}"
 
-  for db in (← read).hintDatabases do
+  if depth > ctx.maximumDepth then
+    return
+
+  for db in ctx.hintDatabases do
     for hint in db.hints do
---      trace[Meta.Tactic.eauto] "[{db.name}] {← hint.toString}"
-      -- TODO: How to cancel the metavariable update resulting from `isDefEq`
-      -- if subgoal resolution fails?
-      match hint with
-      | .Constant _ expr type =>
-          if ← isDefEq goal type then
-            trace[Meta.Tactic.eauto.hints] "[{db.name}] trying hint: {← hint.toString}"
-            -- TODO: Can this application fail?
-            let subgoals ← goalMvar.apply expr
-            trace[Meta.Tactic.eauto.hints] "subgoals: {subgoals}"
-      | _ =>
-          continue
-
-  return .none
+      try
+        commitIfNoEx do
+    --      trace[Meta.Tactic.eauto] "[{db.name}] {← hint.toString}"
+          match hint with
+          | .Constant _ expr _ =>
+              trace[Meta.Tactic.eauto.hints] "[{db.name}] trying hint: {hint}"
+              let subgoals ← goalMVar.apply expr
+              trace[Meta.Tactic.eauto.hints] "subgoals: {subgoals}"
+              withReader (λ ctx => { ctx with depth := depth + 1 }) do
+                subgoals.forM solveSubgoal
+          | _ => pure ()
+        catch _ => pure ()
 
 end Eauto
 
 -- Tactic front-end for testing
 
 def eautoMain (useTypeclasses: Bool): TacticM Unit :=
-  Elab.Tactic.withMainContext do
-    let goalMvar ← Elab.Tactic.getMainGoal
+  withMainContext do
+    let goalMVar ← getMainGoal
 
     -- Load hypotheses as hints
-    let ctx ← Lean.MonadLCtx.getLCtx
-    let hypHints ← ctx.foldrM (fun (decl: LocalDecl) (hyps: List Eauto.Hint) => do
-        if decl.isAuxDecl then
-          return hyps
-        else
-          return .Constant decl.userName decl.toExpr (← inferType decl.toExpr) :: hyps)
-      []
+    let mut hypHints := #[]
+    for ldecl in ← getLCtx do
+      if ! ldecl.isAuxDecl then
+        hypHints := hypHints.push $
+          .Constant ldecl.userName ldecl.toExpr (← inferType ldecl.toExpr)
+
     let hypDB: Eauto.HintDB := {
       name := `_localcontext,
       hints := hypHints
     }
 
     let eautoCtx: Eauto.Context := {
-      hintDatabases := [hypDB],
-      useTypeclasses := useTypeclasses,
-      maximumDepth := 5,
+      hintDatabases := #[hypDB]
+      useTypeclasses := useTypeclasses
+      maximumDepth := 5
+      depth := 0
     }
 
     -- Solve a single goal
-    let result ← Eauto.solveSubgoal goalMvar 0 eautoCtx
-    match result with
-    | .none => trace[Meta.Tactic.eauto] "no proof found"
-    | .some r => trace[Meta.Tactic.eauto] "final proof: {← ppExpr r}"
+    Eauto.solveSubgoal goalMVar |>.run eautoCtx
+    match ← getExprMVarAssignment? goalMVar with
+    | none =>
+      trace[Meta.Tactic.eauto] "no proof found"
+    | some proof =>
+      trace[Meta.Tactic.eauto] "final proof: {← instantiateMVars proof}"
+
 
 elab "eauto" : tactic =>
   eautoMain false
