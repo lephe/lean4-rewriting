@@ -6,6 +6,8 @@ we're not using it because it's not a typeclass (and difficult to relate to the
 other relation classes).
 -/
 
+import GeneralizedRewriting.Eauto
+
 abbrev relation (α: Type _) := α → α → Prop
 
 class Reflexive {α: Type _} (R: relation α) where
@@ -20,6 +22,8 @@ class Transitive {α: Type _} (R: relation α) where
 class PER {α: Type _} (R: relation α) extends Symmetric R, Transitive R
 
 class Equiv {α: Type _} (R: relation α) extends PER R, Reflexive R
+
+eauto_hint Reflexive.refl: grewrite
 
 /-
 ## Morphisms
@@ -155,43 +159,3 @@ example (h: Rα a a'): Rβ (fαβ a) x := by
   rewrite [h₂]
   sorry
 end Examples
-
--- Test how general we can make the typeclass search
--- These rules do blow up for obvious reasons
-
-instance Subrel_Respectful_1 {Rα₁ Rα₂: relation α} {Rβ: relation β}
-         [h_Sα: Subrel Rα₁ Rα₂] [PER Rα₁] [PER Rα₂] [PER Rβ]:
-         Subrel (Rα₂ ==> Rβ) (Rα₁ ==> Rβ) where
-  prf h₁ _ _ h := h₁ _ _ (h_Sα.prf h)
-
-instance Subrel_Respectful_2 {Rα: relation α} {Rβ₁ Rβ₂: relation β}
-         [PER Rα] [h_Sβ: Subrel Rβ₁ Rβ₂] [PER Rβ₁] [PER Rβ₂]:
-         Subrel (Rα ==> Rβ₁) (Rα ==> Rβ₂) where
-  prf h₂ _ _ h := h_Sβ.prf (h₂ _ _ h)
-
-instance Proper_Subrel (R R': relation α) [PER R] [PER R']
-   [S: Subrel R R'] [P: Proper R f]: Proper R' f where
-  prf := S.prf P.prf
-
-instance [Equiv R]: Subrel Eq R where
-  prf h := match h with | .refl _ => Reflexive.refl _
-
-instance {α} {R: relation α}: Subrel R R where
-  prf h := h
-
-section TypeclassResolution
-
-variable (α β γ: Type)
-variable (Rα₁ Rα₂: relation α) (Rβ₁ Rβ₂: relation β) (Rγ₁ Rγ₂: relation γ)
-variable [Equiv Rα₁] [Equiv Rα₂] [Equiv Rβ₁] [Equiv Rβ₂] [Equiv Rγ₁] [Equiv Rγ₂]
-variable (f: α → β → γ)
-variable [P₁: Proper (Rα₁ ==> Rβ₁ ==> Rγ₁) f]
-variable [P₂: Proper (Rα₂ ==> Rβ₂ ==> Rγ₂) f]
-
-/- Too slow
-#synth Proper (Rα₁ ==> Rβ₁ ==> Rγ₁) f
-#synth Proper (Eq ==> Rβ₁ ==> Rγ₁) f
-#synth Proper (Rα₁ ==> Eq ==> Rγ₁) f
-#synth Proper (Eq ==> Eq ==> Rγ₁) f -/
-
-end TypeclassResolution

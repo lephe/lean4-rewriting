@@ -180,7 +180,7 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
       withOptions (pp.sanitizeNames.set . false) do
         trace[Meta.Tactic.eauto] "intros {new_fvars.size} binders: {goalMVar}"
 
-    -- Check hypotheses
+    -- Try hypotheses
     for ldecl in ← getLCtx do
       if ! ldecl.isAuxDecl then
         try
@@ -196,6 +196,7 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
             return ()
         catch _ => pure ()
 
+    -- Try database hints
     for db in ctx.hintDatabases do
       for hint in db.hints do
         try
@@ -206,12 +207,14 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
                 trace[Meta.Tactic.eauto.hints] "[{db.name}] applying hint: {hint}"
                 if subgoals != [] then
                   trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
-                -- If we manage to solve this goal and all the stack, return
                 solveNext (subgoals.map (depth+1, ·) ++ goalStack)
                 return ()
-            | _ => pure ()
+            | .Extern _ _ _ =>
+                -- TODO: Apply extern hints
+                pure ()
         catch _ => pure ()
 
+    -- Try typeclass instances
     if ctx.useTypeclasses && (← isClass? goalType).isSome then
       let instances ← SynthInstance.getInstances goalType
       trace[Meta.Tactic.eauto.instances] "instances: {instances}"
@@ -250,39 +253,34 @@ end
 def eautoCore (initialGoals: List MVarId): EautoM Unit :=
   solveNext (initialGoals.map (0, ·))
 
-def eautoMain (dbNames: Array Name) (useTypeclasses: Bool): TacticM Unit := do
+def eautoMain (goals: List MVarId) (dbNames: Array Name) (useTypeclasses: Bool): TacticM Bool := do
   let env ← getEnv
   let db := eautoDatabaseExtension.getState env
 
-  withMainContext do
-    let goalMVar ← getMainGoal
+  let eautoCtx: Context := {
+    hintDatabases := ← dbNames.mapM (EautoDB.getDB db ·)
+    useTypeclasses := useTypeclasses
+    maximumDepth := 5
+  }
 
-    let eautoCtx: Context := {
-      hintDatabases := ← dbNames.mapM (EautoDB.getDB db ·)
-      useTypeclasses := useTypeclasses
-      maximumDepth := 5
-    }
+  try commitIfNoEx (Eauto.eautoCore goals |>.run eautoCtx)
+  catch _ => pure ()
 
-    -- Solve a single goal
-    try commitIfNoEx (Eauto.eautoCore [goalMVar] |>.run eautoCtx)
-    catch _ => pure ()
-
-    match ← getExprMVarAssignment? goalMVar with
-    | none =>
-      trace[Meta.Tactic.eauto] "no proof found"
-    | some proof =>
-      trace[Meta.Tactic.eauto] "final proof: {← ppExpr proof}"
+  let success ← goals.allM (fun m => do return (← getExprMVarAssignment? m).isSome)
+  if !success then
+    trace[Meta.Tactic.eauto] "no proof found"
+  return success
 
 end Eauto
 
-elab "eauto" : tactic =>
-  Eauto.eautoMain #[] false
+elab "eauto" : tactic => do
+  let _ ← Eauto.eautoMain [← getMainGoal] #[] false
 
-elab "typeclasses_eauto" : tactic =>
-  Eauto.eautoMain #[] true
+elab "typeclasses_eauto" : tactic => do
+  let _ ← Eauto.eautoMain [← getMainGoal] #[] true
 
-elab "eauto" "with" dbs:ident+ : tactic =>
-  Eauto.eautoMain (dbs.map TSyntax.getId) false
+elab "eauto" "with" dbs:ident+ : tactic => do
+  let _ ← Eauto.eautoMain [← getMainGoal] (dbs.map TSyntax.getId) false
 
-elab "typeclasses_eauto" "with" dbs:ident+ : tactic =>
-  Eauto.eautoMain (dbs.map TSyntax.getId) true
+elab "typeclasses_eauto" "with" dbs:ident+ : tactic => do
+  let _ ← Eauto.eautoMain [← getMainGoal] (dbs.map TSyntax.getId) true

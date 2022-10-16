@@ -32,6 +32,10 @@ instance: ToMessageData HintDB where
 
 abbrev EautoDB := Array HintDB
 
+-- TODO: I get some hints multiple times. Does persistence mean that imported
+-- entries get transitively registered as entries of the current module? If so,
+-- patch out `exportHints` to only export the hints created by `addHint`.
+
 def EautoDB.addHint (dbs: EautoDB) (h: HintDescr): EautoDB :=
   match dbs.findIdx? (fun db => db.name = h.databaseName) with
   | some i =>
