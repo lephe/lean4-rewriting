@@ -8,27 +8,26 @@ algorithm, this will instantiate metavariables.
 
 General idea to solve a goal:
 
-1. Reduce it to WHNF (different visibility options could be considered)
+1. Try to apply hypotheses from the local context; the "cost" is the number of
+   parameters (subgoals, roughly). If one unifies, solve subgoals recursively.
+   Depending on whether we solve normally (`eauto`) or as a custom typeclass
+   algorithm (`typeclasses_eauto`), typeclass parameters are either synthesized
+   immediately or left as subgoals.
 
-2. Select hints based on the shape of the goal. Hints are:
+2. Try to apply hints from provided databases. These can be:
+   - Constant hints, ie. theorems. The method is the same as for hypotheses.
+   - Extern hints (a pattern + a tactic + a fixed cost).
 
-   - Pre-selected constants, when they unify with the goal. This most notably
-     includes hypotheses. The cost is the number of subgoals that applying them
-     would generate.
+3. When solving as a custom typeclass algorithm, try instances given by
+   `SynthInstance.getInstances` (ie. instances that unify with the goal).
 
-   - External hints (a pattern + a tactic + a cost) if the pattern unifies with
-     the goal. The cost is provided by the hint.
-
-   - For typeclasses: instances given by `Lean.Meta.SynthInstance.getInstances`
-     (ie. ones that unify with the goal). The cost is computed like constants.
-
-3. Try all the hints that apply in increasing order of cost.
-
-4. Recursively solve all the subgoals that get generated.
+4. Recursively solve all the subgoals *and* the entire pending stack (which is
+   affected by current decisions due to metavariables being unified). If that
+   fails, backtrack to the next applicable hint.
 
 5. If not hint applies or a pre-determined maximum depth is reached, fail.
 
-Wishlist:
+Future wishlist:
 - Caching. There is *a ton* of redundant work during backtracking.
   This requires being smart with metavariables, since the same "goal" can be
   traversed with different metavariables assignments.
@@ -36,11 +35,10 @@ Wishlist:
   `Lean.Meta.SynthInstance` finds.
 - Solve the most egregious performance issues.
 
-Current state (basically assumption):
-TODO: Sort constant hints by priority (determining the priority requires
-      applying them; potentially unifiying metavars... is there a simpler
-      measure like the number of dependent hypotheses?)
-TODO: Figure out how to apply extern hints
+Realistic TODO list:
+- TODO: Sort hypotheses, constant hints and typeclass instances by priority
+  based on `getExpectedNumArgs`.
+- TODO: Figure out how to apply extern hints
 -/
 
 import Lean
