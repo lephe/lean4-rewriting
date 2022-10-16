@@ -44,30 +44,102 @@ TODO: Figure out how to apply extern hints
 -/
 
 import Lean
+import GeneralizedRewriting.EautoHints
 
 open Lean Meta Elab Tactic
+
+/-
+## apply_no_synth
+
+This variant of `apply` does not try to solve implicit instances by typeclass
+resolution, and instead adds them as subgoals. It also ignores dependent
+subgoals and case naming (for the purpose of `eauto`).
+-/
+
+namespace ApplyNoSynth
+
+private def throwApplyError {α} (mvarId : MVarId) (eType : Expr) (targetType : Expr) : MetaM α :=
+  throwTacticEx `apply mvarId m!"failed to unify{indentExpr eType}\nwith{indentExpr targetType}"
+
+private def dependsOnOthers (mvar : Expr) (otherMVars : Array Expr) : MetaM Bool :=
+  otherMVars.anyM fun otherMVar => do
+    if mvar == otherMVar then
+      return false
+    else
+      let otherMVarType ← inferType otherMVar
+      return (otherMVarType.findMVar? fun mvarId => mvarId == mvar.mvarId!).isSome
+
+private def getNonDependentMVars (mvars : Array Expr) : MetaM (Array MVarId) := do
+  let mut nonDeps := #[]
+  for mvar in mvars do
+    if !(← dependsOnOthers mvar mvars) then
+      nonDeps := nonDeps.push mvar.mvarId!
+  return nonDeps
+
+def _root_.Lean.MVarId.applyNoSynth (mvarId : MVarId) (e : Expr) : MetaM (List MVarId) :=
+  mvarId.withContext do
+    mvarId.checkNotAssigned `apply
+    let targetType ← mvarId.getType
+    let eType      ← inferType e
+    let mut (numArgs, hasMVarHead) ← getExpectedNumArgsAux eType
+    unless hasMVarHead do
+      let targetTypeNumArgs ← getExpectedNumArgs targetType
+      numArgs := numArgs - targetTypeNumArgs
+    let (newMVars, _, eType) ← forallMetaTelescopeReducing eType (some numArgs)
+    unless (← isDefEq eType targetType) do throwApplyError mvarId eType targetType
+    let e ← instantiateMVars e
+    mvarId.assign (mkAppN e newMVars)
+    let newMVars ← newMVars.filterM fun mvar => not <$> mvar.mvarId!.isAssigned
+    let otherMVarIds ← getMVarsNoDelayed e
+    let newMVarIds := (← getNonDependentMVars newMVars) |>.toList
+    let otherMVarIds := otherMVarIds.filter fun mvarId => !newMVarIds.contains mvarId
+    let result := newMVarIds ++ otherMVarIds.toList
+    result.forM (·.headBetaType)
+    return result
+
+end ApplyNoSynth
+
+/-
+## eauto hint commands
+-/
+
+namespace Eauto
+
+elab "#print_eauto_db": command => do
+  let env ← getEnv
+  let dbs := eautoDatabaseExtension.getState env
+  if dbs.size == 0 then
+    logInfo "no hint databases"
+  else
+    logInfo (MessageData.joinSep (dbs.toList.map toMessageData) (.ofFormat "\n\n"))
+
+elab "eauto_hint " cst:ident ":" dbname:ident: command => do
+  let env ← getEnv
+  let hint: Hint ←
+    match env.find? cst.getId with
+    | some decl => pure <| Hint.Constant cst.getId decl.value! decl.type
+    | none => throwError "no such constant {cst}"
+
+  setEnv (eautoDatabaseExtension.addEntry env {
+    databaseName := dbname.getId,
+    hint := hint,
+  })
+
+end Eauto
+
+/-
+## `eauto` and `typeclasses_eauto`
+-/
+
+namespace Eauto
 
 initialize
   registerTraceClass `Meta.Tactic.eauto
   registerTraceClass `Meta.Tactic.eauto.goals
   registerTraceClass `Meta.Tactic.eauto.hints
 
-initialize eautoFailedExceptionId : InternalExceptionId ← registerInternalExceptionId `eautoFailed
-
-namespace Eauto
-
-inductive Hint where
-  | Constant (n: Name) (expr: Expr) (type: Expr)
-  | Extern (term: Term) (tactic: TSyntax `tactic) (cost: Nat)
-
-instance : ToMessageData Hint where
-  toMessageData
-    | .Constant n _ type => m!"{n}: {type}"
-    | .Extern term tactic cost => m!"Extern {cost}: {term} => {tactic}"
-
-structure HintDB where
-  name: Name
-  hints: Array Hint
+initialize
+  eautoFailedExceptionId : InternalExceptionId ← registerInternalExceptionId `eautoFailed
 
 structure Context where
   hintDatabases: Array HintDB
@@ -89,9 +161,14 @@ instance : MonadBacktrack Meta.SavedState EautoM where
 private def throwEautoFailedEx: EautoM Unit :=
   throw <| Exception.internal eautoFailedExceptionId
 
+private def apply' (goal: MVarId) (expr: Expr) (synthInstances: Bool): EautoM (List MVarId) :=
+  if synthInstances then
+    goal.apply expr
+  else
+    goal.applyNoSynth expr
+
 mutual
-partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarId)):
-    EautoM Unit := do
+partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarId)): EautoM Unit := do
   let ctx ← read
 
   -- Intro any new binders
@@ -109,9 +186,10 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
         try
           commitIfNoEx do
             let t ← inferType ldecl.toExpr
-            let subgoals ← goalMVar.apply ldecl.toExpr
+            let subgoals ← apply' goalMVar ldecl.toExpr !ctx.useTypeclasses
             trace[Meta.Tactic.eauto.hints] "applying hypothesis: {ldecl.userName}: {← ppExpr t}"
-            trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
+            if subgoals != [] then
+              trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
             -- Proceed to the subgoals or the next goal; in case of failure,
             -- attempt other hints
             solveNext (subgoals.map (depth+1, ·) ++ goalStack)
@@ -124,9 +202,10 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
           commitIfNoEx do
             match hint with
             | .Constant _ expr _ =>
-                let subgoals ← goalMVar.apply expr
+                let subgoals ← apply' goalMVar expr !ctx.useTypeclasses
                 trace[Meta.Tactic.eauto.hints] "[{db.name}] applying hint: {hint}"
-                trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
+                if subgoals != [] then
+                  trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
                 -- If we manage to solve this goal and all the stack, return
                 solveNext (subgoals.map (depth+1, ·) ++ goalStack)
                 return ()
@@ -157,16 +236,15 @@ end
 def eautoCore (initialGoals: List MVarId): EautoM Unit :=
   solveNext (initialGoals.map (0, ·))
 
-end Eauto
+def eautoMain (dbNames: Array Name) (useTypeclasses: Bool): TacticM Unit := do
+  let env ← getEnv
+  let db := eautoDatabaseExtension.getState env
 
--- Tactic front-end for testing
-
-def eautoMain (useTypeclasses: Bool): TacticM Unit :=
   withMainContext do
     let goalMVar ← getMainGoal
 
-    let eautoCtx: Eauto.Context := {
-      hintDatabases := #[]
+    let eautoCtx: Context := {
+      hintDatabases := ← dbNames.mapM (EautoDB.getDB db ·)
       useTypeclasses := useTypeclasses
       maximumDepth := 5
     }
@@ -181,9 +259,16 @@ def eautoMain (useTypeclasses: Bool): TacticM Unit :=
     | some proof =>
       trace[Meta.Tactic.eauto] "final proof: {← ppExpr proof}"
 
+end Eauto
 
 elab "eauto" : tactic =>
-  eautoMain false
+  Eauto.eautoMain #[] false
 
 elab "typeclasses_eauto" : tactic =>
-  eautoMain true
+  Eauto.eautoMain #[] true
+
+elab "eauto" "with" dbs:ident+ : tactic =>
+  Eauto.eautoMain (dbs.map TSyntax.getId) false
+
+elab "typeclasses_eauto" "with" dbs:ident+ : tactic =>
+  Eauto.eautoMain (dbs.map TSyntax.getId) true

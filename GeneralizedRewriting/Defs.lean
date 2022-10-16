@@ -49,6 +49,9 @@ notation Rα " ==> " Rβ => respectful Rα Rβ
 
 -- Instances used by the search algorithm
 
+instance Reflexive_Subrel: Reflexive (@Subrel α) where
+  refl _ := ⟨id⟩
+
 instance Subrel_respectful [Sα: @Subrel α R₂ R₁] [Sβ: @Subrel β S₁ S₂]:
     Subrel (R₁ ==> S₁) (R₂ ==> S₂) where
   prf H _ _ h := Sβ.prf (H _ _ (Sα.prf h))
@@ -86,6 +89,12 @@ instance respectful_PER [PER R₁] [PER R₂]: PER (R₁ ==> R₂) where
     Transitive.trans
       (h x y h₁)
       (h' y y (Transitive.trans (Symmetric.symm h₁) h₁))
+
+instance Subrel_Iff_impl: Subrel Iff impl where
+  prf h := h.1
+
+instance Subrel_Iff_flip_impl: Subrel Iff (flip impl) where
+  prf h := h.2
 
 --
 
