@@ -137,6 +137,7 @@ initialize
   registerTraceClass `Meta.Tactic.eauto
   registerTraceClass `Meta.Tactic.eauto.goals
   registerTraceClass `Meta.Tactic.eauto.hints
+  registerTraceClass `Meta.Tactic.eauto.instances
 
 initialize
   eautoFailedExceptionId : InternalExceptionId ← registerInternalExceptionId `eautoFailed
@@ -173,6 +174,7 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
 
   -- Intro any new binders
   let (new_fvars, goalMVar) ← goalMVar.intros
+  let goalType ← goalMVar.getType
 
   goalMVar.withContext do
     if new_fvars.size > 0 then
@@ -210,6 +212,20 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
                 solveNext (subgoals.map (depth+1, ·) ++ goalStack)
                 return ()
             | _ => pure ()
+        catch _ => pure ()
+
+    if ctx.useTypeclasses && (← isClass? goalType).isSome then
+      let instances ← SynthInstance.getInstances goalType
+      trace[Meta.Tactic.eauto.instances] "instances: {instances}"
+      for inst in instances do
+        try
+          commitIfNoEx do
+            let subgoals ← apply' goalMVar inst !ctx.useTypeclasses
+            trace[Meta.Tactic.eauto.hints] "applying instance: {inst}: {← ppExpr (← inferType inst)}"
+            if subgoals != [] then
+              trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
+            solveNext (subgoals.map (depth+1, ·) ++ goalStack)
+            return ()
         catch _ => pure ()
 
     if (← getExprMVarAssignment? goalMVar).isNone then

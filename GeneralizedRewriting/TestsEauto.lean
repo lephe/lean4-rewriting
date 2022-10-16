@@ -73,11 +73,10 @@ example {α β: Type} {Rα: relation α} {Pα: α → Prop}
 
 --== Typeclass resolution cases (on database) ==--
 
-eauto_hint Subrel_respectful: test_eauto
-eauto_hint Reflexive.refl: test_eauto
-eauto_hint Reflexive_Subrel: test_eauto
-eauto_hint Subrel_Iff_flip_impl: test_eauto
-
+eauto_hint Subrel_respectful: test_eauto_1
+eauto_hint Reflexive.refl: test_eauto_1
+eauto_hint Reflexive_Subrel: test_eauto_1
+eauto_hint Subrel_Iff_flip_impl: test_eauto_1
 #print_eauto_db
 
 -- Only locally-relevant hypotheses in context here
@@ -87,4 +86,17 @@ example {α β: Type _} {Rα: relation α} {Pα: α → Prop}
      Proper R₁ Pα →
      Subrel R₁ (Rα ==> R₂) →
      Subrel R₂ (flip impl) → β): β := by
-  typeclasses_eauto with test_eauto
+  typeclasses_eauto with test_eauto_1
+
+--== Using eauto as a typeclass resolution algorithm ==--
+
+eauto_hint Reflexive.refl: test_eauto_2
+#print_eauto_db
+
+example {α β: Type _} {Rα: relation α} {Pα: α → Prop}
+  (h₁: Proper (Rα ==> Iff) Pα)
+  (goal: forall (R₁: relation (α → Prop)) (R₂: relation Prop),
+     Proper R₁ Pα →
+     Subrel R₁ (Rα ==> R₂) →
+     Subrel R₂ (flip impl) → β): β := by
+  typeclasses_eauto with test_eauto_2
