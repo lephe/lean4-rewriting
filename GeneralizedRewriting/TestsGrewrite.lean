@@ -16,20 +16,37 @@ set_option trace.Meta.Tactic.grewrite true
 set_option trace.Meta.Tactic.eauto true
 set_option trace.Meta.Tactic.eauto.hints true
 
+-- Smallest example
 example (h: Rα a a') (finish: Pα a') : Pα a := by
   grewrite h
   exact finish
 
+-- Rewrite a PER within itself
 example (h: Rα a a') (finish: Rα a' x) : Rα a x := by
   grewrite h
   exact finish
-
 example (h: Rα a a') (finish: Rα x a') : Rα x a := by
   grewrite h
   exact finish
 
+-- Nested function call
 example (h: Rα a a') (finish: Rβ (fαβ a') x): Rβ (fαβ a) x := by
   grewrite h
+  exact finish
+
+-- Multiple occurrences
+example (h: Rα a a') (finish: Rα a' a'): Rα a a := by
+  grewrite h
+  exact finish
+example (h: Rα a a') (finish: Rα a' a): Rα a a := by
+  grewrite h at 1
+  exact finish
+example (h: Rα a a') (finish: Rα a a'): Rα a a := by
+  grewrite h at 2
+  exact finish
+example (h: Rα a a') (finish: Rα a' a'): Rα a a := by
+  grewrite h at -1
+  grewrite h at 1
   exact finish
 
 end Examples

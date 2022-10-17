@@ -26,23 +26,6 @@ Based on:
 [1] Sozeau, M. 2009. A New Look at Generalized Rewriting in Type Theory.
     Journal of Formalized Reasoning. 2, 1 (Jan. 2009), 41–62.
     DOI:https://doi.org/10.6092/issn.1972-5787/1574.
-
-## Inputs and outputs
-
-Inputs:
-  τ  -- Input term
-  ρ  -- Rewriting lemma (of the form `∀ ϕ…, R α… t u`)
-Outputs:
-  τ' -- Rewritten term
-  R  -- Relation for rewriting (contains metavariables)
-  p  -- Proof of rewrite
-  ψ  -- Typeclass queries that need solving
-
-TODO:
-  - What kind of new constraints ψ do you get from unifying in the UNIFY rule?
-    ---> I'll assume these are metavariable assignments happening in MetaM
-  - Can the rewrite of [impl τ₁ τ₂] in ARROW not return an impl?
-  - What if there is a unification in ATOM? What is the default?
 -/
 
 import GeneralizedRewriting.Defs
@@ -54,15 +37,31 @@ open Lean Meta Elab Tactic
 initialize
   registerTraceClass `Meta.Tactic.grewrite
 
+inductive SelectionCriterion where
+  | Only (occs: Array Nat)
+  | AllBut (occs: Array Nat)
+
+def SelectionCriterion.selects: SelectionCriterion → Nat → Bool
+  | Only occs => occs.contains
+  | AllBut occs => not ∘ occs.contains
+
 -- Environment where the outline algorithm is run
 
 structure RewriteState where
+  -- Rewrite to apply: ρ ≡ ρ_R ρ_t ρ_u
   ρ: Expr
   ρ_R: Expr
   ρ_t: Expr
   ρ_u: Expr
+  -- Proof of ρ
   ρ_proof: Expr
+  -- Set of constraints generated so far
   ψ: Array Expr
+  -- Number of occurrences found so far, and selected
+  occsFound: Nat
+  occsSelected: Nat
+  -- Selection criterion
+  selection: SelectionCriterion
 
 abbrev RewriteM := StateT RewriteState TacticM
 
@@ -75,6 +74,19 @@ def addConstraint (e: Expr): RewriteM Unit := do
   let st ← get
   set { st with ψ := st.ψ.push e }
 
+/-
+Inputs:
+  t -- Input term
+  ρ -- Rewriting lemma (of the form `∀ ϕ…, R α… t u`) (in context)
+Outputs:
+  u -- Rewritten term
+  R -- Relation for rewriting (contains metavariables)
+  p -- Proof of rewrite
+  N -- Number of occurences of the rewrite found in `t`
+  ψ -- Typeclass queries that need solving (in context)
+
+TODO: Can the rewrite of [impl τ₁ τ₂] in ARROW not return an impl?
+-/
 partial def outline (t: Expr): RewriteM (Expr × Expr × Expr) := do
   let t ← whnf t
   withTraceNode `Meta.Tactic.grewrite (fun _ => return m!"outline: {t}") do
@@ -84,7 +96,13 @@ partial def outline (t: Expr): RewriteM (Expr × Expr × Expr) := do
   -- can apply ρ directly.
   if ← isDefEq t state.ρ_t then
     trace[Meta.Tactic.grewrite] "using rule: UNIFY"
-    return (state.ρ_u, state.ρ_R, state.ρ_proof)
+    let Nf := state.occsFound
+    let Ns := state.occsSelected
+    -- Occurrences are numbered starting at 1.
+    let selected := state.selection.selects (Nf+1)
+    set { state with occsFound := Nf + 1, occsSelected := Ns + (if selected then 1 else 0) }
+    if selected then
+      return (state.ρ_u, state.ρ_R, state.ρ_proof)
 
   -- [APP]: If t is an app `f e` where f is of non-dependent function type
   -- `τ → σ`, guess a relation `?m_T: relation σ` for the co-domain. This is
@@ -98,8 +116,8 @@ partial def outline (t: Expr): RewriteM (Expr × Expr × Expr) := do
         let m_T ← mkFreshExprMVar (← mkAppM ``relation #[σ])
         let m_sub ← mkFreshExprMVar (← mkAppM ``Subrel #[F, ← mkAppM ``respectful #[E, m_T]])
         addConstraint m_sub
-        return (mkApp f' e', m_T,
-                ← mkAppOptM ``Subrel.prf #[none, none, none, m_sub, f, f', pf, e, e', pe])
+        let p ← mkAppOptM ``Subrel.prf #[none, none, none, m_sub, f, f', pf, e, e', pe]
+        return (mkApp f' e', m_T, p)
 
   -- TODO: [ARROW], [LAMBDA] and [FORALL]
 
@@ -109,7 +127,8 @@ partial def outline (t: Expr): RewriteM (Expr × Expr × Expr) := do
   let m_S ← mkFreshExprMVar (← mkAppM ``relation #[τ])
   let m_Proper ← mkFreshExprMVar (← mkAppM ``Proper #[m_S, t])
   addConstraint m_Proper
-  return (t, m_S, ← mkAppOptM ``Proper.prf #[none, none, none, m_Proper])
+  let p ← mkAppOptM ``Proper.prf #[none, none, none, m_Proper]
+  return (t, m_S, p)
 
 def outlineMain (t: Expr): RewriteM (Expr × Expr × Expr) := do
   -- At the top-level, we need to rewrite for any relation which is a
@@ -119,25 +138,36 @@ def outlineMain (t: Expr): RewriteM (Expr × Expr × Expr) := do
   let MainSubrel ← mkAppM ``Subrel #[R, ← mkAppM ``flip #[mkConst ``impl]]
   let m_sub ← mkFreshExprMVar MainSubrel
   addConstraint m_sub
-  return (u, R, ← mkAppOptM ``Subrel.prf #[none, none, none, m_sub, none, none, p])
+  let p' ← mkAppOptM ``Subrel.prf #[none, none, none, m_sub, none, none, p]
+  return (u, R, p')
 
 end RewriteM
 
 
 -- Tactic front-end
 
-elab "grewrite " h:term : tactic =>
+def grewrite (h: Expr) (occs: SelectionCriterion): TacticM Unit :=
   withMainContext do
     let goal ← getMainGoal
     let goalType ← goal.getType
-    let h ← elabTerm h .none
     let ρ ← inferType (← whnf h)
 
     match ρ with
     | .app (.app ρ_R ρ_t) ρ_u =>
-        let st: RewriteState := { ρ, ρ_R, ρ_t, ρ_u, ρ_proof := h, ψ := #[] }
+        let st: RewriteState := {
+          ρ, ρ_R, ρ_t, ρ_u,
+          ρ_proof := h,
+          ψ := #[],
+          occsFound := 0,
+          occsSelected := 0,
+          selection := occs }
         let ((_, _, p), st') ← RewriteM.outlineMain goalType st |>.run
         let ψ := st'.ψ
+        let Ns := st'.occsSelected
+
+        trace[Meta.Tactic.grewrite] "{st'.occsFound} occurrences found, {Ns} selected"
+        if Ns = 0 then
+          throwError "grewrite: no occurrence found or none selected"
 
         -- Order the `Proper` constraints first as they guide the search better
         let mut ψ_Propers := #[]
@@ -167,3 +197,16 @@ elab "grewrite " h:term : tactic =>
         throwError f!"unable to interpret {ρ} as a relation"
         return
     return
+
+elab "grewrite " h:term : tactic => do
+  let h ← elabTerm h .none
+  grewrite h (.AllBut #[])
+
+elab "grewrite " h:term " at " neg:"-"? occs:num+ : tactic => do
+  let h ← elabTerm h .none
+  let occs := occs.map TSyntax.getNat
+  let selection: SelectionCriterion :=
+    match neg with
+    | none => .Only occs
+    | _ => .AllBut occs
+  grewrite h selection
