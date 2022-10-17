@@ -115,7 +115,7 @@ elab "eauto_hint " cst:ident ":" dbname:ident: command => do
   let env ← getEnv
   let hint: Hint ←
     match env.find? cst.getId with
-    | some decl => pure <| Hint.Constant cst.getId decl.value! decl.type
+    | some _ => pure <| Hint.Constant cst.getId
     | none => throwError "no such constant {cst}"
 
   setEnv (eautoDatabaseExtension.addEntry env {
@@ -202,9 +202,11 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
         try
           commitIfNoEx do
             match hint with
-            | .Constant _ expr _ =>
+            | .Constant name =>
+                let expr ← mkConstWithFreshMVarLevels name
+                let type ← inferType expr
                 let subgoals ← apply' goalMVar expr !ctx.useTypeclasses
-                trace[Meta.Tactic.eauto.hints] "[{db.name}] applying hint: {hint}"
+                trace[Meta.Tactic.eauto.hints] "[{db.name}] applying hint: {hint}: {type}"
                 if subgoals != [] then
                   trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
                 solveNext (subgoals.map (depth+1, ·) ++ goalStack)

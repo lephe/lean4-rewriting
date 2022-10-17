@@ -9,12 +9,12 @@ open Lean Meta
 namespace Eauto
 
 inductive Hint where
-  | Constant (n: Name) (expr: Expr) (type: Expr)
+  | Constant (n: Name)
   | Extern (term: Term) (tactic: TSyntax `tactic) (cost: Nat)
 
 instance : ToMessageData Hint where
   toMessageData
-    | .Constant n _ type => m!"{n}: {type}"
+    | .Constant n => n
     | .Extern term tactic cost => m!"Extern {cost}: {term} => {tactic}"
 
 structure HintDescr where
