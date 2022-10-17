@@ -1,7 +1,7 @@
 /-
 # Generalized rewriting algorithm
 
-This algorithm produces a "skeleton" of the proof for a rewrite. It provides
+This algorithm produces a "outline" of the proof for a rewrite. It provides
 the main structure, but leaves two elements undefined (through metavariables):
 
 1. Which relations to use in the codomain of relevant function calls;
@@ -54,7 +54,7 @@ open Lean Meta Elab Tactic
 initialize
   registerTraceClass `Meta.Tactic.grewrite
 
--- Environment where the skeleton algorithm is run
+-- Environment where the outline algorithm is run
 
 structure RewriteState where
   ρ: Expr
@@ -75,8 +75,9 @@ def addConstraint (e: Expr): RewriteM Unit := do
   let st ← get
   set { st with ψ := st.ψ.push e }
 
-def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) :=
-  withTraceNode `Meta.Tactic.grewrite (fun _ => return m!"skeleton: {t}") do
+partial def outline (t: Expr): RewriteM (Expr × Expr × Expr) := do
+  let t ← whnf t
+  withTraceNode `Meta.Tactic.grewrite (fun _ => return m!"outline: {t}") do
   let state ← get
 
   -- [UNIFY]: If t unifies with the LHS of ρ then we have an occurrence, and we
@@ -90,11 +91,10 @@ def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) :=
   -- also the place where we allow `Subrel` instances.
   if let .app f e := t then
     let type_f ← whnf (← inferType f)
-    trace[Meta.Tactic.grewrite] "type_f = {type_f}"
     if let some (_, σ) := type_f.arrow? then
-        trace[Meta.Tactic.grewrite] "using rule: APP"
-        let (f', F, pf) ← skeleton f
-        let (e', E, pe) ← skeleton e
+        trace[Meta.Tactic.grewrite] "using rule: APP (function type: {type_f})"
+        let (f', F, pf) ← outline f
+        let (e', E, pe) ← outline e
         let m_T ← mkFreshExprMVar (← mkAppM ``relation #[σ])
         let m_sub ← mkFreshExprMVar (← mkAppM ``Subrel #[F, ← mkAppM ``respectful #[E, m_T]])
         addConstraint m_sub
@@ -104,18 +104,18 @@ def skeleton (t: Expr): RewriteM (Expr × Expr × Expr) :=
   -- TODO: [ARROW], [LAMBDA] and [FORALL]
 
   -- [ATOM]: Default to requiring `Proper` on the atom for a suitable relation
-  trace[Meta.Tactic.grewrite] "using rule: ATOM"
+  trace[Meta.Tactic.grewrite] "using rule: ATOM ({← whnf t})"
   let τ ← inferType t
   let m_S ← mkFreshExprMVar (← mkAppM ``relation #[τ])
   let m_Proper ← mkFreshExprMVar (← mkAppM ``Proper #[m_S, t])
   addConstraint m_Proper
   return (t, m_S, ← mkAppOptM ``Proper.prf #[none, none, none, m_Proper])
 
-def skeletonMain (t: Expr): RewriteM (Expr × Expr × Expr) := do
+def outlineMain (t: Expr): RewriteM (Expr × Expr × Expr) := do
   -- At the top-level, we need to rewrite for any relation which is a
   -- subrelation of `flip impl`.
   -- TODO: To rewrite in a hypothesis, use a subrelation of `impl`.
-  let (u, R, p) ← skeleton t
+  let (u, R, p) ← outline t
   let MainSubrel ← mkAppM ``Subrel #[R, ← mkAppM ``flip #[mkConst ``impl]]
   let m_sub ← mkFreshExprMVar MainSubrel
   addConstraint m_sub
@@ -136,7 +136,7 @@ elab "grewrite " h:term : tactic =>
     match ρ with
     | .app (.app ρ_R ρ_t) ρ_u =>
         let st: RewriteState := { ρ, ρ_R, ρ_t, ρ_u, ρ_proof := h, ψ := #[] }
-        let ((_, _, p), st') ← RewriteM.skeletonMain goalType st |>.run
+        let ((_, _, p), st') ← RewriteM.outlineMain goalType st |>.run
         let ψ := st'.ψ
 
         let pp ← ψ.mapM fun e => do

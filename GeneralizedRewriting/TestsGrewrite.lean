@@ -16,8 +16,6 @@ set_option trace.Meta.Tactic.eauto true
 set_option trace.Meta.Tactic.eauto.hints true
 
 example (h: Rα a a') (ha': Pα a') : Pα a := by
-  -- TODO: Why does the following `have` confuse the skeleton algorithm?
-  -- have h₁ := @Reflexive.refl
   grewrite h
   exact ha'
 
