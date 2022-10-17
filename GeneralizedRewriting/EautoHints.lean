@@ -1,6 +1,7 @@
-
 /-
 ## Hint databases and hint declaration
+
+This module handles the registration, import and export of eauto hints.
 -/
 
 import Lean
@@ -17,9 +18,14 @@ instance : ToMessageData Hint where
     | .Constant n => n
     | .Extern term tactic cost => m!"Extern {cost}: {term} => {tactic}"
 
-structure HintDescr where
-  databaseName: Name
-  hint: Hint
+/-
+A top-level command run by modules to create databases, add hints, etc. We keep
+them inside .olean files using a persistent extensions so that hints are
+retained between imports.
+-/
+inductive HintCommand where
+  | CreateDB (name: Name)
+  | CreateHint (databaseName: Name) (hint: Hint)
 
 structure HintDB where
   name: Name
@@ -27,41 +33,52 @@ structure HintDB where
 
 instance: ToMessageData HintDB where
   toMessageData db :=
-    m!"in database {db.name}:\n  " ++
     MessageData.joinSep (db.hints.toList.map toMessageData) (.ofFormat "\n  ")
 
-abbrev EautoDB := Array HintDB
+-- We remember which commands are imported and which ones are original so we
+-- are able to export only the originals
+structure EautoDB where
+  dbs: Array HintDB := #[]
+  moduleCommands: Array HintCommand := #[]
+deriving Inhabited
 
--- TODO: I get some hints multiple times. Does persistence mean that imported
--- entries get transitively registered as entries of the current module? If so,
--- patch out `exportHints` to only export the hints created by `addHint`.
+def EautoDB.findHintDB? (e: EautoDB) (name: Name): Option Nat :=
+  e.dbs.findIdx? (fun db => db.name = name)
 
-def EautoDB.addHint (dbs: EautoDB) (h: HintDescr): EautoDB :=
-  match dbs.findIdx? (fun db => db.name = h.databaseName) with
-  | some i =>
-      dbs.modify i (fun db => { db with hints := db.hints.push h.hint })
-  | none =>
-      dbs.push ({ name := h.databaseName, hints := #[h.hint] })
+def EautoDB.hasHintDB (e: EautoDB) (name: Name): Bool :=
+  e.findHintDB? name |>.isSome
 
-def EautoDB.importHints (aah: Array (Array HintDescr)): ImportM EautoDB :=
-  return aah.foldl (fun dbs ah => ah.foldl EautoDB.addHint dbs) #[]
+-- We cannot throw errors at this level, so we let the top-level commands
+-- handle it instead and do no-ops here.
+def EautoDB.runCommand (e: EautoDB): HintCommand → EautoDB
+  | .CreateDB name =>
+      if e.hasHintDB name then e
+      else { e with dbs := e.dbs.push { name := name, hints := #[] }}
+  | .CreateHint dbName hint =>
+      match e.findHintDB? dbName with
+      | none => e
+      | some i => { e with
+          dbs := e.dbs.modify i (fun db => { db with hints := db.hints.push hint })}
 
-def EautoDB.exportHints (dbs: EautoDB): Array HintDescr := Id.run do
-  let mut ah := #[]
-  for db in dbs do
-    for hint in db.hints do
-      ah := ah.push { databaseName := db.name, hint := hint }
-  return ah
+def EautoDB.addCommand (e: EautoDB) (c: HintCommand): EautoDB :=
+  let e' := e.runCommand c
+  { e' with moduleCommands := e'.moduleCommands.push c }
 
-def EautoDB.getDB (dbs: EautoDB) (name: Name): CoreM HintDB :=
-  match dbs.find? (fun db => db.name = name) with
+def EautoDB.importCommands (comms: Array (Array HintCommand)): ImportM EautoDB :=
+  return comms.foldl (fun dbs ac => ac.foldl EautoDB.runCommand dbs) {}
+
+def EautoDB.exportCommands (e: EautoDB): Array HintCommand :=
+  e.moduleCommands
+
+def EautoDB.getDB (e: EautoDB) (name: Name): CoreM HintDB :=
+  match e.dbs.find? (fun db => db.name = name) with
   | some db => return db
   | none => throwError m!"no eauto database called {name}"
 
-initialize eautoDatabaseExtension: PersistentEnvExtension HintDescr HintDescr EautoDB ←
+initialize eautoDatabaseExtension: PersistentEnvExtension HintCommand HintCommand EautoDB ←
   registerPersistentEnvExtension {
-    mkInitial := return #[],
-    addImportedFn := EautoDB.importHints,
-    addEntryFn := EautoDB.addHint,
-    exportEntriesFn := EautoDB.exportHints,
+    mkInitial := return {},
+    addImportedFn := EautoDB.importCommands,
+    addEntryFn := EautoDB.addCommand,
+    exportEntriesFn := EautoDB.exportCommands,
   }

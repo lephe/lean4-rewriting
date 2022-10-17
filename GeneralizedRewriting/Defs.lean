@@ -23,6 +23,7 @@ class PER {α: Type _} (R: relation α) extends Symmetric R, Transitive R
 
 class Equiv {α: Type _} (R: relation α) extends PER R, Reflexive R
 
+eauto_create_db grewrite
 eauto_hint Reflexive.refl: grewrite
 
 /-

@@ -73,6 +73,7 @@ example {α β: Type} {Rα: relation α} {Pα: α → Prop}
 
 --== Typeclass resolution cases (on database) ==--
 
+eauto_create_db test_eauto_1
 eauto_hint Subrel_respectful: test_eauto_1
 eauto_hint Reflexive.refl: test_eauto_1
 eauto_hint Reflexive_Subrel: test_eauto_1
@@ -90,6 +91,7 @@ example {α β: Type} {Rα: relation α} {Pα: α → Prop}
 
 --== Using eauto as a typeclass resolution algorithm ==--
 
+eauto_create_db test_eauto_2
 eauto_hint Reflexive.refl: test_eauto_2
 #print_eauto_db
 

@@ -105,23 +105,34 @@ namespace Eauto
 
 elab "#print_eauto_db": command => do
   let env ← getEnv
-  let dbs := eautoDatabaseExtension.getState env
-  if dbs.size == 0 then
+  let e := eautoDatabaseExtension.getState env
+  if e.dbs.size == 0 then
     logInfo "no hint databases"
   else
-    logInfo (MessageData.joinSep (dbs.toList.map toMessageData) (.ofFormat "\n\n"))
+    logInfo (MessageData.joinSep (e.dbs.toList.map fun db =>
+        m!"in database {db.name}:\n  " ++ toMessageData db)
+      (.ofFormat "\n\n"))
+
+elab "eauto_create_db" dbname:ident: command => do
+  let env ← getEnv
+  let e := eautoDatabaseExtension.getState env
+
+  if e.hasHintDB dbname.getId then
+    throwError "eauto database {dbname} already exists"
+  else
+    setEnv (eautoDatabaseExtension.addEntry env <| .CreateDB dbname.getId)
 
 elab "eauto_hint " cst:ident ":" dbname:ident: command => do
   let env ← getEnv
+  let e := eautoDatabaseExtension.getState env
   let hint: Hint ←
     match env.find? cst.getId with
     | some _ => pure <| Hint.Constant cst.getId
     | none => throwError "no such constant {cst}"
 
-  setEnv (eautoDatabaseExtension.addEntry env {
-    databaseName := dbname.getId,
-    hint := hint,
-  })
+  if ! e.hasHintDB dbname.getId then
+    throwError "no eauto database {dbname}"
+  setEnv (eautoDatabaseExtension.addEntry env <| .CreateHint dbname.getId hint)
 
 end Eauto
 
