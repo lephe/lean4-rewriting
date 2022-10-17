@@ -230,12 +230,17 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
     -- Try typeclass instances
     if ctx.useTypeclasses && (← isClass? goalType).isSome then
       let instances ← SynthInstance.getInstances goalType
+      -- TODO: Use a better measure that eliminates arguments who appear in the
+      -- type of following arguments. And possibly give a lower cost to
+      -- instances whose goal has more constants and less variables.
+      let instances ← instances.mapM (fun e => do return (e, ← getExpectedNumArgs (← inferType e)))
+      let instances := instances.qsort (fun (_, c₁) (_, c₂) => c₁ < c₂)
       trace[Meta.Tactic.eauto.instances] "instances: {instances}"
-      for inst in instances do
+      for (inst, cost) in instances do
         try
           commitIfNoEx do
             let subgoals ← apply' goalMVar inst !ctx.useTypeclasses
-            trace[Meta.Tactic.eauto.hints] "applying instance: {inst}: {← ppExpr (← inferType inst)}"
+            trace[Meta.Tactic.eauto.hints] "applying instance({cost}): {inst}: {← ppExpr (← inferType inst)}"
             if subgoals != [] then
               trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
             solveNext (subgoals.map (depth+1, ·) ++ goalStack)

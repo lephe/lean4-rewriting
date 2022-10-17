@@ -139,12 +139,24 @@ elab "grewrite " h:term : tactic =>
         let ((_, _, p), st') ← RewriteM.outlineMain goalType st |>.run
         let ψ := st'.ψ
 
+        -- Order the `Proper` constraints first as they guide the search better
+        let mut ψ_Propers := #[]
+        let mut ψ_others := #[]
+        for e in ψ do
+          let τe ← whnf (← inferType e)
+          if τe.getAppFn.isConstOf ``Proper then
+            ψ_Propers := ψ_Propers.push e
+          else
+            ψ_others := ψ_others.push e
+
+        let ψ := ψ_Propers ++ ψ_others
+
         let pp ← ψ.mapM fun e => do
           let type_e ← inferType e
           return f!"\n  {← ppExpr type_e}"
         trace[Meta.Tactic.grewrite] "constraints to solve: {Format.join pp.toList}"
 
-        -- Try to solve the constraints with `eauto`
+        -- Try to solve the constraints with `typeclasses_eauto with grewrite`
         let success ← Eauto.eautoMain (ψ.map Expr.mvarId!).toList #[`grewrite] true
         if !success then
           throwError "grewrite: unable to solve constraints"

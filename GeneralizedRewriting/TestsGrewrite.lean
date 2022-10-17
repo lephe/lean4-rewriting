@@ -9,22 +9,27 @@ variable (Pα: α → Prop) (Pβ: β → Prop) (Pγ: γ → Prop)
 variable (Pαβγ: α → β → Prop)
 variable (fαβ: α → β) (fβγ: β → γ)
 variable [Proper_fαβ: Proper (Rα ==> Rβ) fαβ]
-variable [Proper_Rα: Proper (Rα ==> Iff) Pα]
+variable [Proper_Pα: Proper (Rα ==> Iff) Pα]
+variable [PER Rα] [PER Rβ]
 
 set_option trace.Meta.Tactic.grewrite true
 set_option trace.Meta.Tactic.eauto true
 set_option trace.Meta.Tactic.eauto.hints true
 
-example (h: Rα a a') (ha': Pα a') : Pα a := by
+example (h: Rα a a') (finish: Pα a') : Pα a := by
   grewrite h
-  exact ha'
+  exact finish
 
-example (h: Rα a a') : Rα a x := by
+example (h: Rα a a') (finish: Rα a' x) : Rα a x := by
   grewrite h
-  sorry
+  exact finish
 
-example (h: Rα a a') : Rβ (fαβ a) x := by
+example (h: Rα a a') (finish: Rα x a') : Rα x a := by
   grewrite h
-  sorry
+  exact finish
+
+example (h: Rα a a') (finish: Rβ (fαβ a') x): Rβ (fαβ a) x := by
+  grewrite h
+  exact finish
 
 end Examples

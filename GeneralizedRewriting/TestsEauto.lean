@@ -67,7 +67,7 @@ example {α β: Type} {Rα: relation α} {Pα: α → Prop}
      Subrel R₂ (flip impl) → β): β := by
   have h₁ := @Subrel_respectful
   have h₂ := @Reflexive_Subrel
-  have h₃ := @Reflexive.refl
+  have h₃ := @Reflexive.refl.{0}
   have h₄ := @Subrel_Iff_flip_impl
   typeclasses_eauto
 
@@ -92,6 +92,7 @@ example {α β: Type} {Rα: relation α} {Pα: α → Prop}
 --== Using eauto as a typeclass resolution algorithm ==--
 
 eauto_create_db test_eauto_2
+eauto_hint Reflexive_Subrel: test_eauto_2
 eauto_hint Reflexive.refl: test_eauto_2
 #print_eauto_db
 
