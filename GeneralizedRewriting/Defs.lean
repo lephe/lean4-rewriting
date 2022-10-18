@@ -68,9 +68,33 @@ instance Proper_pointwise_relation {α β: Type _}:
     Proper (Subrel ==> Subrel) (@pointwise_relation α β) where
   prf _ _ h := ⟨fun hpr a => h.prf (hpr a)⟩
 
+-- TODO: Introduce some `ProperProxy` to go faster with this one
 instance Proper_Reflexive {α: Type _} (Rα: relation α) [Reflexive Rα] (a: α):
     Proper Rα a where
   prf := Reflexive.refl _
+
+instance Subrel_Eq_respectful_Eq_Eq {α β: Type _}:
+    Subrel Eq (@Eq α ==> @Eq β) :=
+  ⟨fun h₁ _ _ h₂ => by simp [h₁, h₂]⟩
+
+-- TODO: We can assume `Transitive R` and instead put `flip` in judicious
+-- places for these rules. (This might require better suport for `flip`.)
+
+instance {R: relation α} [PER R]: Proper (R ==> R ==> Iff) R where
+  prf _ _ h_a _ _ h_b :=
+    ⟨fun h => Transitive.trans (Transitive.trans (Symmetric.symm h_a) h) h_b,
+     fun h => Transitive.trans (Transitive.trans h_a h) (Symmetric.symm h_b)⟩
+
+instance {R: relation α} [PER R]: Proper (R ==> Eq ==> Iff) R where
+  prf a a' h_a b b' h_b :=
+    ⟨by rewrite [h_b]; exact fun h => Transitive.trans (Symmetric.symm h_a) h,
+     by rewrite [h_b]; exact fun h => Transitive.trans h_a h⟩
+
+instance {R: relation α} [PER R]: Proper (Eq ==> R ==> Iff) R where
+  prf a a' h_a b b' h_b :=
+    ⟨by rewrite [h_a]; exact fun h => Transitive.trans h h_b,
+     by rewrite [h_a]; exact fun h => Transitive.trans h (Symmetric.symm h_b)⟩
+
 
 -- Standard instances
 
@@ -104,27 +128,21 @@ instance Subrel_Iff_impl: Subrel Iff impl where
 instance Subrel_Iff_flip_impl: Subrel Iff (flip impl) where
   prf h := h.2
 
---
 
--- TODO: We can assume `Transitive R` and instead put `flip` in judicious
--- places for these rules. (This might require better suport for `flip`.)
+-- Some standard functions
 
-instance {R: relation α} [PER R]: Proper (R ==> R ==> Iff) R where
-  prf _ _ h_a _ _ h_b :=
-    ⟨fun h => Transitive.trans (Transitive.trans (Symmetric.symm h_a) h) h_b,
-     fun h => Transitive.trans (Transitive.trans h_a h) (Symmetric.symm h_b)⟩
+instance Proper_And_Iff: Proper (Iff ==> Iff ==> Iff) And :=
+ ⟨fun _ _ hx _ _ hy => by simp [hx, hy]⟩
 
-instance {R: relation α} [PER R]: Proper (R ==> Eq ==> Iff) R where
-  prf a a' h_a b b' h_b :=
-    ⟨by rewrite [h_b]; exact fun h => Transitive.trans (Symmetric.symm h_a) h,
-     by rewrite [h_b]; exact fun h => Transitive.trans h_a h⟩
+instance Proper_Or_Iff: Proper (Iff ==> Iff ==> Iff) Or :=
+ ⟨fun _ _ hx _ _ hy => by simp [hx, hy]⟩
 
-instance {R: relation α} [PER R]: Proper (Eq ==> R ==> Iff) R where
-  prf a a' h_a b b' h_b :=
-    ⟨by rewrite [h_a]; exact fun h => Transitive.trans h h_b,
-     by rewrite [h_a]; exact fun h => Transitive.trans h (Symmetric.symm h_b)⟩
+instance Proper_Not_Iff: Proper (Iff ==> Iff) Not :=
+ ⟨fun _ _ h => by simp [h]⟩
 
--- Order the hints by most specific first
+
+-- Theorem hints (ordered by most specific first)
+
 eauto_create_db grewrite
 eauto_hint Reflexive_Subrel: grewrite
 eauto_hint Reflexive.refl: grewrite
