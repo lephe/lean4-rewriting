@@ -49,4 +49,17 @@ example (h: Rα a a') (finish: Rα a' a'): Rα a a := by
   grewrite h at 1
   exact finish
 
+-- More complex selection
+example (h: Rα a a') (finish: Pα a'): Pα a ∧ Pα a ∧ Pα a ∧ Pα a ∧ Pα a ∧ Pα a := by
+  have h₁: Proper (Iff ==> Iff ==> Iff) And := ⟨fun _ _ hx _ _ hy => by simp [hx, hy]⟩
+  have h₂: Proper (Eq ==> Eq) Pα := ⟨fun _ _ hx => by simp [hx]⟩
+  grewrite h at 5
+  grewrite h at 5
+  grewrite h at 1
+  grewrite h at 3
+  grewrite h at 1
+  grewrite h at 1
+  repeat (constructor; assumption)
+  assumption
+
 end Examples

@@ -1,5 +1,15 @@
 /-
-# Generalized rewriting algorithm
+# Generalized rewriting
+-/
+
+import GeneralizedRewriting.Defs
+import GeneralizedRewriting.Eauto
+import Lean
+
+open Lean Meta Elab Tactic
+
+/-
+## Outline algorithm
 
 This algorithm produces a "outline" of the proof for a rewrite. It provides
 the main structure, but leaves two elements undefined (through metavariables):
@@ -28,12 +38,6 @@ Based on:
     DOI:https://doi.org/10.6092/issn.1972-5787/1574.
 -/
 
-import GeneralizedRewriting.Defs
-import GeneralizedRewriting.Eauto
-import Lean
-
-open Lean Meta Elab Tactic
-
 initialize
   registerTraceClass `Meta.Tactic.grewrite
 
@@ -55,8 +59,6 @@ structure RewriteState where
   ρ_u: Expr
   -- Proof of ρ
   ρ_proof: Expr
-  -- Set of constraints generated so far
-  ψ: Array Expr
   -- Number of occurrences found so far, and selected
   occsFound: Nat
   occsSelected: Nat
@@ -65,29 +67,18 @@ structure RewriteState where
 
 abbrev RewriteM := StateT RewriteState TacticM
 
-namespace RewriteM
-
-def run: RewriteM α → RewriteState → TacticM (α × RewriteState) :=
-  StateT.run
-
-def addConstraint (e: Expr): RewriteM Unit := do
-  let st ← get
-  set { st with ψ := st.ψ.push e }
-
 /-
 Inputs:
   t -- Input term
-  ρ -- Rewriting lemma (of the form `∀ ϕ…, R α… t u`) (in context)
+  ρ -- Rewriting lemma (of the form `∀ ϕ…, R α… t u`) (in `RewriteState`)
 Outputs:
   u -- Rewritten term
   R -- Relation for rewriting (contains metavariables)
   p -- Proof of rewrite
-  N -- Number of occurences of the rewrite found in `t`
-  ψ -- Typeclass queries that need solving (in context)
-
-TODO: Can the rewrite of [impl τ₁ τ₂] in ARROW not return an impl?
+  ψ -- Typeclass queries that need solving
+  N -- Number of occurences of the rewrite found in `t` (in `RewriteState`)
 -/
-partial def outline (t: Expr): RewriteM (Expr × Expr × Expr) := do
+partial def outline (t: Expr): RewriteM (Expr × Expr × Expr × Array Expr) := do
   let t ← whnf t
   withTraceNode `Meta.Tactic.grewrite (fun _ => return m!"outline: {t}") do
   let state ← get
@@ -102,7 +93,7 @@ partial def outline (t: Expr): RewriteM (Expr × Expr × Expr) := do
     let selected := state.selection.selects (Nf+1)
     set { state with occsFound := Nf + 1, occsSelected := Ns + (if selected then 1 else 0) }
     if selected then
-      return (state.ρ_u, state.ρ_R, state.ρ_proof)
+      return (state.ρ_u, state.ρ_R, state.ρ_proof, #[])
 
   -- [APP]: If t is an app `f e` where f is of non-dependent function type
   -- `τ → σ`, guess a relation `?m_T: relation σ` for the co-domain. This is
@@ -111,40 +102,35 @@ partial def outline (t: Expr): RewriteM (Expr × Expr × Expr) := do
     let type_f ← whnf (← inferType f)
     if let some (_, σ) := type_f.arrow? then
         trace[Meta.Tactic.grewrite] "using rule: APP (function type: {type_f})"
-        let (f', F, pf) ← outline f
-        let (e', E, pe) ← outline e
+        let (f', F, pf, ψf) ← outline f
+        let (e', E, pe, ψe) ← outline e
         let m_T ← mkFreshExprMVar (← mkAppM ``relation #[σ])
         let m_sub ← mkFreshExprMVar (← mkAppM ``Subrel #[F, ← mkAppM ``respectful #[E, m_T]])
-        addConstraint m_sub
         let p ← mkAppOptM ``Subrel.prf #[none, none, none, m_sub, f, f', pf, e, e', pe]
-        return (mkApp f' e', m_T, p)
+        -- Very important order of constraints: first the argument, then the
+        -- function, once the relation on the argument has been guessed
+        return (mkApp f' e', m_T, p, (ψe ++ ψf).push m_sub)
 
   -- TODO: [ARROW], [LAMBDA] and [FORALL]
+  -- TODO: Can the rewrite of [impl τ₁ τ₂] in ARROW not return an impl?
 
   -- [ATOM]: Default to requiring `Proper` on the atom for a suitable relation
   trace[Meta.Tactic.grewrite] "using rule: ATOM ({← whnf t})"
   let τ ← inferType t
   let m_S ← mkFreshExprMVar (← mkAppM ``relation #[τ])
   let m_Proper ← mkFreshExprMVar (← mkAppM ``Proper #[m_S, t])
-  addConstraint m_Proper
   let p ← mkAppOptM ``Proper.prf #[none, none, none, m_Proper]
-  return (t, m_S, p)
+  return (t, m_S, p, #[m_Proper])
 
-def outlineMain (t: Expr): RewriteM (Expr × Expr × Expr) := do
+def outlineMain (t: Expr): RewriteM (Expr × Expr × Expr × Array Expr) := do
   -- At the top-level, we need to rewrite for any relation which is a
   -- subrelation of `flip impl`.
   -- TODO: To rewrite in a hypothesis, use a subrelation of `impl`.
-  let (u, R, p) ← outline t
+  let (u, R, p, ψ) ← outline t
   let MainSubrel ← mkAppM ``Subrel #[R, ← mkAppM ``flip #[mkConst ``impl]]
   let m_sub ← mkFreshExprMVar MainSubrel
-  addConstraint m_sub
   let p' ← mkAppOptM ``Subrel.prf #[none, none, none, m_sub, none, none, p]
-  return (u, R, p')
-
-end RewriteM
-
-
--- Tactic front-end
+  return (u, R, p', ψ.push m_sub)
 
 def grewrite (h: Expr) (occs: SelectionCriterion): TacticM Unit :=
   withMainContext do
@@ -157,33 +143,17 @@ def grewrite (h: Expr) (occs: SelectionCriterion): TacticM Unit :=
         let st: RewriteState := {
           ρ, ρ_R, ρ_t, ρ_u,
           ρ_proof := h,
-          ψ := #[],
           occsFound := 0,
           occsSelected := 0,
           selection := occs }
-        let ((_, _, p), st') ← RewriteM.outlineMain goalType st |>.run
-        let ψ := st'.ψ
+        let ((_, _, p, ψ), st') ← outlineMain goalType st |>.run
         let Ns := st'.occsSelected
 
         trace[Meta.Tactic.grewrite] "{st'.occsFound} occurrences found, {Ns} selected"
         if Ns = 0 then
           throwError "grewrite: no occurrence found or none selected"
 
-        -- Order the `Proper` constraints first as they guide the search better
-        let mut ψ_Propers := #[]
-        let mut ψ_others := #[]
-        for e in ψ do
-          let τe ← whnf (← inferType e)
-          if τe.getAppFn.isConstOf ``Proper then
-            ψ_Propers := ψ_Propers.push e
-          else
-            ψ_others := ψ_others.push e
-
-        let ψ := ψ_Propers ++ ψ_others
-
-        let pp ← ψ.mapM fun e => do
-          let type_e ← inferType e
-          return f!"\n  {← ppExpr type_e}"
+        let pp ← ψ.mapM fun e => do return f!"\n{← ppExpr (← inferType e)}"
         trace[Meta.Tactic.grewrite] "constraints to solve: {Format.join pp.toList}"
 
         -- Try to solve the constraints with `typeclasses_eauto with grewrite`
@@ -197,6 +167,8 @@ def grewrite (h: Expr) (occs: SelectionCriterion): TacticM Unit :=
         throwError f!"unable to interpret {ρ} as a relation"
         return
     return
+
+-- Tactic front-end
 
 elab "grewrite " h:term : tactic => do
   let h ← elabTerm h .none
