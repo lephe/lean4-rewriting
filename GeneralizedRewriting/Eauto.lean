@@ -168,16 +168,29 @@ instance : MonadBacktrack Meta.SavedState EautoM where
   saveState := Meta.saveState
   restoreState s := s.restore
 
-private def throwEautoFailedEx: EautoM Unit :=
+private def throwEautoFailedEx {α: Type _}: EautoM α :=
   throw <| Exception.internal eautoFailedExceptionId
 
-private def apply' (goal: MVarId) (expr: Expr) (synthInstances: Bool): EautoM (List MVarId) :=
+private def apply' (goal: MVarId) (expr: Expr) (synthInstances: Bool): EautoM (List MVarId) := do
+  if (← goal.isAssigned) then
+    throwEautoFailedEx
+  let goalType ← goal.getType
+  let exprType ← inferType expr
+  let mut (numArgs, hasMVarHead) ← getExpectedNumArgsAux exprType
+  unless hasMVarHead do
+    let targetTypeNumArgs ← getExpectedNumArgs goalType
+    numArgs := numArgs - targetTypeNumArgs
+  let (_, _, exprType) ← forallMetaTelescopeReducing exprType (some numArgs)
+  unless (← isDefEq exprType goalType) do
+    throwEautoFailedEx
+
   if synthInstances then
     goal.apply expr
   else
     goal.applyNoSynth expr
 
 mutual
+-- Solve the provided goal and continue on with the entire stack.
 partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarId)): EautoM Unit := do
   let ctx ← read
 
@@ -194,68 +207,56 @@ partial def solve (goalMVar: MVarId) (depth: Nat) (goalStack: List (Nat × MVarI
     -- Try hypotheses
     for ldecl in ← getLCtx do
       if ! ldecl.isAuxDecl then
-        try
-          commitIfNoEx do
-            let t ← inferType ldecl.toExpr
-            let subgoals ← apply' goalMVar ldecl.toExpr !ctx.useTypeclasses
-            trace[Meta.Tactic.eauto.hints] "applying hypothesis: {ldecl.userName}: {← ppExpr t}"
-            if subgoals != [] then
-              trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
-            -- Proceed to the subgoals or the next goal; in case of failure,
-            -- attempt other hints
-            solveNext (subgoals.map (depth+1, ·) ++ goalStack)
-            return ()
-        catch _ => pure ()
+        if ← tryProgress depth goalStack do
+          let t ← inferType ldecl.toExpr
+          let subgoals ← apply' goalMVar ldecl.toExpr !ctx.useTypeclasses
+          trace[Meta.Tactic.eauto.hints] "applying hypothesis: {ldecl.userName}: {← ppExpr t}"
+          return subgoals
+        then return ()
 
     -- Try database hints
     for db in ctx.hintDatabases do
       for hint in db.hints do
-        try
-          commitIfNoEx do
-            match hint with
-            | .Constant name =>
-                let expr ← mkConstWithFreshMVarLevels name
-                let type ← inferType expr
-                let subgoals ← apply' goalMVar expr !ctx.useTypeclasses
-                trace[Meta.Tactic.eauto.hints] "[{db.name}] applying hint: {hint}: {type}"
-                if subgoals != [] then
-                  trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
-                solveNext (subgoals.map (depth+1, ·) ++ goalStack)
-                return ()
-            | .Extern _ _ _ =>
-                -- TODO: Apply extern hints
-                pure ()
-        catch _ => pure ()
+        if ← tryProgress depth goalStack do
+          match hint with
+          | .Constant name =>
+              let expr ← mkConstWithFreshMVarLevels name
+              let type ← inferType expr
+              let subgoals ← apply' goalMVar expr !ctx.useTypeclasses
+              trace[Meta.Tactic.eauto.hints] "[{db.name}] applying hint: {hint}: {type}"
+              return subgoals
+          | .Extern _ _ _ =>
+              -- TODO: Apply extern hints
+              throwEautoFailedEx
+        then return ()
 
     -- Try typeclass instances
     if ctx.useTypeclasses && (← isClass? goalType).isSome then
       let instances ← SynthInstance.getInstances goalType
-      -- TODO: Use a better measure that eliminates arguments who appear in the
-      -- type of following arguments. And possibly give a lower cost to
-      -- instances whose goal has more constants and less variables.
+      -- TODO: Use a better measure that eliminates arguments that appear in
+      -- the type of following arguments. And possibly give a lower cost to
+      -- instances whose goals have more constants/less variables.
       let instances ← instances.mapM (fun e => do return (e, ← getExpectedNumArgs (← inferType e)))
       let instances := instances.qsort (fun (_, c₁) (_, c₂) => c₁ < c₂)
       trace[Meta.Tactic.eauto.instances] "instances: {instances}"
       for (inst, cost) in instances do
-        try
-          commitIfNoEx do
-            let subgoals ← apply' goalMVar inst !ctx.useTypeclasses
-            trace[Meta.Tactic.eauto.hints] "applying instance({cost}): {inst}: {← ppExpr (← inferType inst)}"
-            if subgoals != [] then
-              trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
-            solveNext (subgoals.map (depth+1, ·) ++ goalStack)
-            return ()
-        catch _ => pure ()
+        if ← tryProgress depth goalStack do
+          let subgoals ← apply' goalMVar inst !ctx.useTypeclasses
+          trace[Meta.Tactic.eauto.hints] "applying instance({cost}): {inst}: {← ppExpr (← inferType inst)}"
+          return subgoals
+        then return ()
 
     if (← getExprMVarAssignment? goalMVar).isNone then
       trace[Meta.Tactic.eauto] "failed to close the goal"
       throwEautoFailedEx
 
-partial def solveNext: List (Nat × MVarId) → EautoM Unit
+-- Pop a goal off the stack and solve it (along with the rest of the stack, by
+-- backtracking).
+partial def nextGoal: List (Nat × MVarId) → EautoM Unit
   | [] => pure ()
   | (depth, goal) :: stack => do
       if ← goal.isAssigned then
-        solveNext stack
+        nextGoal stack
       else
         let ctx ← read
         let goal_type ← instantiateMVars (← goal.getType)
@@ -266,10 +267,21 @@ partial def solveNext: List (Nat × MVarId) → EautoM Unit
             trace[Meta.Tactic.eauto] "maximum depth exceeded"
             throwEautoFailedEx
           solve goal depth stack
+
+-- Try to progress with `tac` and finish the stack. Returns whether successful.
+partial def tryProgress (depth: Nat) (stack: List (Nat × MVarId)) (tac: EautoM (List MVarId)): EautoM Bool :=
+  catchInternalId eautoFailedExceptionId
+    (commitIfNoEx do
+      let subgoals ← tac
+      if subgoals != [] then
+        trace[Meta.Tactic.eauto.hints] "subgoals: {← ppSubgoals subgoals}"
+      nextGoal (subgoals.map (depth+1, ·) ++ stack)
+      return true)
+    (fun _ => return false)
 end
 
 def eautoCore (initialGoals: List MVarId): EautoM Unit :=
-  solveNext (initialGoals.map (0, ·))
+  nextGoal (initialGoals.map (0, ·))
 
 def eautoMain (goals: List MVarId) (dbNames: Array Name) (useTypeclasses: Bool): TacticM Bool := do
   let env ← getEnv
@@ -281,8 +293,9 @@ def eautoMain (goals: List MVarId) (dbNames: Array Name) (useTypeclasses: Bool):
     maximumDepth := 5
   }
 
-  try commitIfNoEx (Eauto.eautoCore goals |>.run eautoCtx)
-  catch _ => pure ()
+  catchInternalId eautoFailedExceptionId
+    (Eauto.eautoCore goals |>.run eautoCtx)
+    (fun _ => pure ())
 
   let success ← goals.allM (fun m => do return (← getExprMVarAssignment? m).isSome)
   if !success then
